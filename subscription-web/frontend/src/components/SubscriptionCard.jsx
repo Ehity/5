@@ -1,0 +1,68 @@
+import { CalendarClock, Repeat } from "lucide-react";
+
+const fmt = (n) => Math.round(n).toLocaleString("ru-RU");
+
+const MONTHS = [
+  "января", "февраля", "марта", "апреля", "мая", "июня",
+  "июля", "августа", "сентября", "октября", "ноября", "декабря",
+];
+
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function daysLeft(iso) {
+  return Math.ceil((new Date(iso) - new Date()) / 86400000);
+}
+
+export default function SubscriptionCard({ sub, onCancel }) {
+  const days = daysLeft(sub.next_charge);
+  return (
+    <div className="card group p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-600 hover:shadow-xl hover:shadow-black/40">
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-800 text-2xl">
+            {sub.icon}
+          </div>
+          <div>
+            <h3 className="font-semibold text-white">{sub.name}</h3>
+            <span className="text-xs text-slate-500">{sub.category}</span>
+          </div>
+        </div>
+        <span className="flex items-center gap-1 rounded-full bg-slate-800 px-2.5 py-1 text-[11px] text-slate-400">
+          <Repeat size={11} /> {sub.charges} списаний
+        </span>
+      </div>
+
+      <div className="mt-4 flex items-baseline gap-1">
+        <span className="text-3xl font-bold text-white">{fmt(sub.monthly_cost)} ₽</span>
+        <span className="text-sm text-slate-500">/ мес</span>
+        <span className="ml-auto text-sm text-slate-500">
+          {fmt(sub.yearly_cost)} ₽/год
+        </span>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-xs">
+        <span className="flex items-center gap-1.5 text-slate-400">
+          <CalendarClock size={13} /> Следующее списание
+        </span>
+        <span className="text-slate-300">
+          {fmtDate(sub.next_charge)}
+          {days >= 0 && (
+            <span className={days <= 3 ? "ml-2 text-amber-400" : "ml-2 text-emerald-400"}>
+              ({days} дн.)
+            </span>
+          )}
+        </span>
+      </div>
+
+      <button
+        onClick={() => onCancel(sub)}
+        className="mt-4 w-full rounded-xl bg-gradient-to-r from-rose-500 to-red-500 py-2.5 text-sm font-semibold text-white shadow-lg shadow-rose-500/20 transition hover:brightness-110 active:scale-[0.99]"
+      >
+        Отменить подписку
+      </button>
+    </div>
+  );
+}
