@@ -1,4 +1,4 @@
-import { CalendarClock, Repeat } from "lucide-react";
+import { CalendarClock, Repeat, ExternalLink } from "lucide-react";
 
 const fmt = (n) => Math.round(n).toLocaleString("ru-RU");
 
@@ -57,12 +57,25 @@ export default function SubscriptionCard({ sub, onCancel }) {
         </span>
       </div>
 
-      <button
-        onClick={() => onCancel(sub)}
-        className="mt-4 w-full rounded-xl bg-gradient-to-r from-rose-500 to-red-500 py-2.5 text-sm font-semibold text-white shadow-lg shadow-rose-500/20 transition hover:brightness-110 active:scale-[0.99]"
-      >
-        Отменить подписку
-      </button>
+      <div className="mt-4 flex items-center gap-3">
+        <button
+          onClick={() => onCancel(sub)}
+          className="flex-1 rounded-xl bg-gradient-to-r from-rose-500 to-red-500 py-2.5 text-sm font-semibold text-white shadow-lg shadow-rose-500/20 transition hover:brightness-110 active:scale-[0.99]"
+        >
+          Отменить подписку
+        </button>
+        {sub.cancel_url && (
+          <a
+            href={sub.cancel_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 text-slate-400 transition hover:border-emerald-500 hover:text-emerald-400 hover:shadow-lg"
+            title="Перейти к управлению подпиской"
+          >
+            <ExternalLink size={18} />
+          </a>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Sparkles, LayoutGrid } from "lucide-react";
+import { Sparkles, LayoutGrid, Search } from "lucide-react";
 
 import Header from "./components/Header.jsx";
 import SavingsBanner from "./components/SavingsBanner.jsx";
@@ -7,7 +7,8 @@ import UploadZone from "./components/UploadZone.jsx";
 import SubscriptionCard from "./components/SubscriptionCard.jsx";
 import LetterModal from "./components/LetterModal.jsx";
 import MonthlyChart from "./components/MonthlyChart.jsx";
-import { fetchSubscriptions, uploadStatement, resetToDemo } from "./api.js";
+import PreviewModal from "./components/PreviewModal.jsx";
+import { fetchSubscriptions, uploadStatement, resetToDemo, generateTestStatement, fetchTestPdfUrl } from "./api.js";
 
 export default function App() {
   const [data, setData] = useState(null);
@@ -15,6 +16,9 @@ export default function App() {
   const [error, setError] = useState(null);
   const [modalSub, setModalSub] = useState(null);
   const [cancelled, setCancelled] = useState([]);
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewData, setPreviewData] = useState(null);
+  const [previewPdfUrl, setPreviewPdfUrl] = useState(null);
 
   async function load() {
     try {
@@ -45,16 +49,48 @@ export default function App() {
     load();
   }
 
-  function handleCancel(sub) {
+    function handleCancel(sub) {
     setModalSub(sub);
     setCancelled((prev) => (prev.includes(sub.id) ? prev : [...prev, sub.id]));
+  }
+
+  async function handleGenerateTest() {
+    try {
+      const d = await generateTestStatement();
+      setPreviewData(d);
+      const pdfUrl = await fetchTestPdfUrl();
+      setPreviewPdfUrl(pdfUrl);
+      setPreviewVisible(true);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  function handleClosePreview() {
+    setPreviewVisible(false);
+    setPreviewData(null);
+    if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
+    setPreviewPdfUrl(null);
+  }
+
+  function handleSendToScan() {
+    if (!previewData) return;
+    setPreviewVisible(false);
+    setData(previewData);
+    setPreviewData(null);
+    if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
+    setPreviewPdfUrl(null);
+    setCancelled([]);
+    setError(null);
   }
 
   if (!data) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4">
         <div className="sber-gradient h-14 w-14 animate-pulse rounded-2xl" />
-        <p className="text-slate-500">{error || "Подключаемся к серверу…"}</p>
+        <p className="text-slate-500">
+          {error || "Подключаемся к серверу…"}
+        </p>
         {error && (
           <button onClick={load} className="rounded-xl bg-emerald-500/10 px-4 py-2 text-sm text-emerald-400">
             Повторить
@@ -68,6 +104,8 @@ export default function App() {
   const savedYearly = data.subscriptions
     .filter((s) => cancelled.includes(s.id))
     .reduce((acc, s) => acc + s.yearly_cost, 0);
+  // Потенциальная экономия — сумма всех подписок, которые можно отменить
+  const potentialSavingsYearly = data.subscriptions.reduce((acc, s) => acc + s.yearly_cost, 0);
 
   return (
     <div className="min-h-screen">
@@ -75,8 +113,8 @@ export default function App() {
 
       <main className="mx-auto max-w-7xl space-y-6 px-6 py-6">
         <SavingsBanner
-          totalYearly={savedYearly > 0 ? savedYearly : data.total_yearly}
-          totalMonthly={savedYearly > 0 ? savedYearly / 12 : data.total_monthly}
+          totalYearly={savedYearly > 0 ? savedYearly : potentialSavingsYearly}
+          totalMonthly={(savedYearly > 0 ? savedYearly : potentialSavingsYearly) / 12}
           cancelledCount={cancelled.length}
         />
 
@@ -104,17 +142,36 @@ export default function App() {
           </div>
           {active.length === 0 && (
             <div className="card flex flex-col items-center gap-2 p-10 text-center">
-              <Sparkles size={28} className="text-emerald-400" />
-              <p className="font-semibold text-white">Все подписки отмечены к отмене!</p>
-              <p className="text-sm text-slate-500">
-                Экономия {Math.round(savedYearly).toLocaleString("ru-RU")} ₽ в год — скопируйте
-                заявления из писем и отправьте в поддержку.
-              </p>
+              {cancelled.length > 0 ? (
+                <>
+                  <Sparkles size={28} className="text-emerald-400" />
+                  <p className="font-semibold text-white">Все подписки отмечены к отмене!</p>
+                  <p className="text-sm text-slate-500">
+                    Экономия {Math.round(savedYearly).toLocaleString("ru-RU")} ₽ в год — скопируйте
+                    заявления из писем и отправьте в поддержку.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Search size={28} className="text-amber-400" />
+                  <p className="font-semibold text-white">Подписок не найдено</p>
+                  <p className="text-sm text-slate-500">
+                    В выписке не обнаружено регулярных списаний — график показывает общие расходы.
+                    Попробуйте загрузить выписку за период с подписками.
+                  </p>
+                  <button
+                    onClick={handleGenerateTest}
+                    className="mt-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:brightness-110"
+                  >
+                    Сгенерировать тестовую выписку
+                  </button>
+                </>
+              )}
             </div>
           )}
         </section>
 
-        <MonthlyChart data={data.monthly} />
+        <MonthlyChart data={data.monthly} mock={data.mock} hasSubscriptions={data.subscriptions.length > 0} />
 
         <footer className="pb-6 pt-2 text-center text-xs text-slate-600">
           Сбер.Сканер Подписок · хакатонный MVP · FastAPI + React + Tailwind CSS
@@ -122,6 +179,15 @@ export default function App() {
       </main>
 
       {modalSub && <LetterModal sub={modalSub} onClose={() => setModalSub(null)} />}
+
+      {previewVisible && previewData && (
+        <PreviewModal
+          csv={previewData.raw_csv || ""}
+          pdfUrl={previewPdfUrl}
+          onClose={handleClosePreview}
+          onSubmit={handleSendToScan}
+        />
+      )}
     </div>
   );
 }

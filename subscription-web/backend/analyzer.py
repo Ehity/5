@@ -13,8 +13,9 @@ from datetime import date, datetime, timedelta
 # ---------------------------------------------------------------------------
 # (каноничное имя, категория, emoji-иконка, ключевые слова в любом регистре)
 BRAND_RULES = [
+    # «Яндекс Плюс» — только точечные ключи (общий «ЯНДЕКС» ловит и такси/кино)
     ("Яндекс Плюс", "Развлечения", "🟡",
-     ["YNDX", "YANDEX", "ЯНДЕКС"]),
+     ["YNDX", "YANDEX_PLUS", "YANDEX PLUS", "ЯНДЕКС.ПЛЮС", "ЯНДЕКС ПЛЮС", "ЯНДЕКС+"]),
     ("Netflix", "Кино и видео", "🎬",
      ["NETFLIX", "NFLX"]),
     ("Иви", "Кино и видео", "🍿",
@@ -63,8 +64,8 @@ def normalize_description(desc: str) -> str:
 # ---------------------------------------------------------------------------
 COLUMN_ALIASES = {
     "date": ["date", "дата", "дата операции", "дата платежа"],
-    "amount": ["amount", "сумма", "сумма платежа", "списание"],
-    "description": ["description", "описание", "назначение", "контрагент", "получатель"],
+    "amount": ["amount", "сумма", "сумма платежа", "списание", "charges"],
+    "description": ["description", "описание", "назначение", "контрагент", "получатель", "merchant"],
 }
 
 
@@ -116,24 +117,60 @@ def parse_csv(content: bytes) -> list[dict]:
         except ValueError:
             continue
         desc = str(row[pick["description"]]).strip()
-        if amount > 0 and desc and d:
+        if amount != 0 and desc and d:
             txs.append({"date": d, "amount": amount, "description": desc})
     txs.sort(key=lambda t: t["date"])
     return txs
 
 
 # ---------------------------------------------------------------------------
-# Парсинг PDF-выписки
+# Парсинг PDF-выписки (формат Сбербанк Онлайн: дата/время → сумма → описание)
 # ---------------------------------------------------------------------------
-# Строки-заглушки, которые не являются описанием транзакции
+# Строки-заглушки (шапки, итоги, нумерация страниц) — не описания транзакций
 _PDF_SKIP_RE = re.compile(
-    r"продолжение|страниц|выписк|счёт|счет|доступн|баланс|всего|итого|банк|"
-    r"дебетов|кредитов|карт[ае]|период|владелец|дат[аы] operations|остаток",
+    r"продолжение|страниц|сформирова|справк|выписк|счёт|счет|доступн|"
+    r"баланс|всего|итого|период|владелец|операци|статус|реквизит|валюта|назначение",
     re.IGNORECASE,
 )
 _DATE_RE = re.compile(r"\b(\d{2}[./]\d{2}[./]\d{2,4})\b")
-# сумма со знаком: -599,00 / − 1 234.56 ₽ / +1 200,50 руб
-_MONEY_RE = re.compile(r"([+−–-])\s*(\d[\d\s\u00a0]*)(?:[.,](\d{2}))?\s*(?:₽|руб|RUB)", re.IGNORECASE)
+_TIME_ONLY_RE = re.compile(r"^[\d\s:.]+$")
+_TIME_IN_DESC_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
+
+# Строгий: обязательны знак и суффикс валюты (формат СберБанк Онлайн)
+_MONEY_STRICT = re.compile(
+    r"(?P<sign>[+−–-])\s*(?P<whole>[\d\u00a0 ]+?)(?:[.,](?P<frac>\d{1,2}))?\s*"
+    r"(?:₽|руб\.?|руб|RUB)",
+    re.IGNORECASE,
+)
+# Свободный: для выписок, где суммы без знака/суффикса. Исключаем телефоны и даты:
+# подходит число с пробелом-разделителем тысячи ИЛИ со знаком ИЛИ с суффиксом валюты.
+_MONEY_LOOSE = re.compile(
+    r"(?<![0-9.,])(?:(?P<sign>[+−–-])\s*)?(?P<whole>[\d\u00a0 ]{2,})(?:[.,](?P<frac>\d{1,2}))?"
+    r"\s*(?P<curr>₽|руб\.?|руб|RUB)?(?![0-9])",
+    re.IGNORECASE,
+)
+
+
+def _parse_money(s: str, strict: bool) -> tuple[str, float | None]:
+    """Возвращает (знак, сумма). Пример: '-599,00 ₽' → ('-', 599.0)."""
+    pattern = _MONEY_STRICT if strict else _MONEY_LOOSE
+    m = pattern.search(s)
+    if not m:
+        return "", None
+    sign = (m.group("sign") or "").strip()
+    curr = m.group("curr") if "curr" in m.groupdict() and m.group("curr") else ""
+    whole = (m.group("whole") or "").replace(" ", "").replace("\u00a0", "")
+    frac = m.group("frac")
+    try:
+        value = float(whole)
+    except ValueError:
+        return "", None
+    # свободный режим: отсеиваем телефоны и даты («866-579-7172», «05.02.2026»)
+    if not strict and not (sign or curr or (" " in whole or "\u00a0" in whole)):
+        return "", None
+    if frac:
+        value += int(frac) / (10 ** len(frac))
+    return sign, round(value, 2)
 
 
 def parse_pdf(content: bytes) -> list[dict]:
@@ -157,82 +194,86 @@ def _transactions_from_lines(lines: list[str]) -> list[dict]:
       1) многострочный (Сбер):  '05.08.26 17:04' / '−599,00 ₽' / 'NETFLIX.COM ...'
       2) однострочный:          '05.08.2026  NETFLIX.COM  -599,00 ₽'
     """
+    has_currency = any(("₽" in l or "руб" in l or "RUB" in l) for l in lines)
+    strict = has_currency  # строгий режим — если в выписке есть знак валюты
+
+    # если в выписке есть хоть один минус — берём только списания,
+    # иначе (все суммы без знака) — берём всё (разделить нельзя)
+    saw_signed = any(
+        _parse_money(l, strict)[0] in "−–-" for l in lines
+    )
+
     txs: list[dict] = []
-    pending_date: date | None = None
-    pending_amount: float | None = None
-    pending_sign = ""
-    desc_parts: list[str] = []
+    pending: dict | None = None  # {'date': date, 'amount': float|None, 'desc': [str]}
 
     def flush() -> None:
-        nonlocal pending_date, pending_amount, pending_sign, desc_parts
-        if pending_date is not None and pending_amount is not None:
-            desc = " ".join(p for p in desc_parts if p).strip()
+        nonlocal pending
+        if pending and pending["amount"] is not None:
+            desc = re.sub(r"\s+", " ", " ".join(pending["desc"])).strip(" -–−.")
             desc = _DATE_RE.sub(" ", desc)
+            desc = _TIME_IN_DESC_RE.sub(" ", desc)
             desc = re.sub(r"\s+", " ", desc).strip(" -–−.")
             if desc:
-                txs.append({"date": pending_date, "amount": abs(pending_amount),
-                            "description": desc[:120], "_signed": pending_sign})
-        pending_date, pending_amount, pending_sign, desc_parts = None, None, "", []
+                txs.append({"date": pending["date"], "amount": pending["amount"],
+                            "description": desc[:120]})
+        pending = None
 
-    saw_signed = any(_MONEY_RE.search(l) and _MONEY_RE.search(l).group(1) in "−–-"
-                     for l in lines)
+    def start_tx(d: date, amount: float | None, desc_part: str = "") -> None:
+        nonlocal pending
+        pending = {"date": d, "amount": amount, "desc": []}
+        if desc_part and not _PDF_SKIP_RE.search(desc_part):
+            pending["desc"].append(desc_part)
 
     for line in lines:
-        date_m = _DATE_RE.search(line)
-        money_m = _MONEY_RE.search(line)
+        m_date = _DATE_RE.search(line)
+        sign, amount = _parse_money(line, strict)
+        is_skip = bool(_PDF_SKIP_RE.search(line))
+        has_money = amount is not None
 
-        if date_m and not money_m:
+        if m_date and has_money:
+            # однострочный формат: дата + (описание) + сумма
+            flush()
+            d = _parse_date(m_date.group(1))
+            if not d:
+                continue
+            # описание между датой и суммой
+            m_money = (_MONEY_STRICT if strict else _MONEY_LOOSE).search(line)
+            desc = (line[:m_date.start()] + " " + line[m_date.end():m_money.start()])
+            desc = _TIME_IN_DESC_RE.sub(" ", desc)
+            desc = re.sub(r"\s+", " ", desc).strip(" -–−.")
+            debit = sign in "−–-"
+            if desc and not _TIME_ONLY_RE.fullmatch(desc):
+                if amount is not None and (debit or not saw_signed):
+                    txs.append({"date": d, "amount": amount, "description": desc[:120]})
+            else:
+                # дата + сумма, описание пойдёт следующими строками
+                start_tx(d, amount if (debit or not saw_signed) else None)
+            continue
+
+        if m_date:
             # новая транзакция начинается (дата/время на отдельной строке)
             flush()
-            pending_date = _parse_date(date_m.group(1))
-            rest = line[date_m.end():].strip()
-            if rest and not _PDF_SKIP_RE.search(rest):
-                desc_parts.append(rest)
+            d = _parse_date(m_date.group(1))
+            if d and not is_skip:
+                rest = line[m_date.end():].strip()
+                start_tx(d, None, rest if not _TIME_ONLY_RE.fullmatch(rest) else "")
             continue
 
-        if money_m:
-            sign = money_m.group(1)
-            amount = float(money_m.group(2).replace(" ", "").replace("\u00a0", "")
-                           .replace(",", "."))
-            if money_m.group(3):
-                amount += int(money_m.group(3)) / 100 if False else 0.0  # копейки уже в group(2)? нет
-            # копейки: group(3) — отдельные сотые, добавим
-            if money_m.group(3):
-                pass
-            debit = sign in "−–-"
-            if date_m:  # однострочный формат: дата + описание + сумма
-                flush()
-                d = _parse_date(date_m.group(1))
-                desc = (line[:date_m.start()] + " " +
-                        line[date_m.end():money_m.start()]).strip()
-                if d and (debit or not saw_signed):
-                    txs.append({"date": d, "amount": amount,
-                                "description": re.sub(r"\s+", " ", desc)[:120],
-                                "_signed": sign})
-            elif pending_date is not None:
-                pending_amount, pending_sign = amount, sign
-                if pending_date and (debit or not saw_signed):
-                    flush()
-                elif not debit and saw_signed:
-                    # это приход — отбрасываем текущую транзакцию
-                    pending_amount = None
+        if has_money:
+            # строка суммы текущей транзакции (или итог/баланс внизу)
+            if pending is not None and not is_skip:
+                debit = sign in "−–-"
+                pending["amount"] = amount if (debit or not saw_signed) else None
             continue
 
-        # обычная строка: описание текущей транзакции или шум
-        if pending_date is not None and pending_amount is None:
-            if not _PDF_SKIP_RE.search(line) and not _TIME_ONLY_RE.fullmatch(line):
-                desc_parts.append(line)
+        # обычная строка: продолжение описания или шапка/шум
+        if pending is not None and not is_skip and not _TIME_ONLY_RE.fullmatch(line):
+            pending["desc"].append(line)
 
     flush()
 
-    # финальная очистка: если ни одна сумма не была со знаком — берём все (PDF без знаков)
-    result = [{"date": t["date"], "amount": t["amount"], "description": t["description"]}
-              for t in txs]
-    result.sort(key=lambda t: t["date"])
+    result = sorted(txs, key=lambda t: t["date"])
     return result
-
-
-_TIME_ONLY_RE = re.compile(r"^[\d\s:.]+$")
 
 def _add_months(d: date, months: int) -> date:
     m = d.month - 1 + months
@@ -252,16 +293,21 @@ def detect_subscriptions(txs: list[dict]) -> list[dict]:
 
     subs = []
     for key, items in groups.items():
-        if len(items) < 2:
+        if len(items) < 3:  # минимум 3 списания, чтобы отличать подписку от случайных совпадений
             continue
         amounts = sorted(i["amount"] for i in items)
         median = amounts[len(amounts) // 2]
-        stable = [i for i in items if abs(i["amount"] - median) <= median * 0.15]
-        if len(stable) < 2:
+        stable = [i for i in items if abs(i["amount"] - median) <= abs(median) * 0.15]
+        if len(stable) < 3:
             continue
         stable.sort(key=lambda t: t["date"])
         gaps = sorted((stable[i + 1]["date"] - stable[i]["date"]).days
                       for i in range(len(stable) - 1))
+        # списания в один день (разные варианты мерчанта) дают gap 0 и ломают
+        # медиану — отбрасываем их, оставляя «настоящие» интервалы между периодами
+        gaps = [g for g in gaps if g >= 10]
+        if not gaps:
+            continue
         med_gap = gaps[len(gaps) // 2]
 
         if 20 <= med_gap <= 40:
@@ -309,6 +355,24 @@ def monthly_expense_series(subs: list[dict], months: int = 6) -> list[dict]:
                 if cur.month == d.month and cur.year == d.year:
                     total += s["monthly_cost"]
                 cur = _add_months(cur, 1)
+        series.append({"month": d.strftime("%m.%Y"), "spent": round(total, 2)})
+    return series
+
+
+def monthly_expense_series_all(txs: list[dict], months: int = 6) -> list[dict]:
+    """Реальные списания по месяцам из ВСЕХ транзакций (не только подписки).
+
+    Строит график общих расходов по выписке, когда подписок не найдено.
+    """
+    today = date.today()
+    series = []
+    for i in range(months - 1, -1, -1):
+        d = _add_months(today.replace(day=1), -i)
+        total = 0.0
+        for t in txs:
+            td = t["date"]
+            if td.year == d.year and td.month == d.month:
+                total += t["amount"]
         series.append({"month": d.strftime("%m.%Y"), "spent": round(total, 2)})
     return series
 

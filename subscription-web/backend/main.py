@@ -18,7 +18,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from analyzer import demo_payload, detect_subscriptions, monthly_expense_series, parse_csv
+from analyzer import (
+    demo_payload,
+    detect_subscriptions,
+    monthly_expense_series,
+    monthly_expense_series_all,
+    parse_csv,
+    parse_pdf,
+)
+from services_db import enrich_subscriptions
+from test_generator import generate_test_csv, generate_test_pdf
 
 app = FastAPI(title="Сбер.Сканер Подписок API", version="1.0.0")
 
@@ -43,33 +52,61 @@ def health() -> dict:
 
 @app.get("/api/subscriptions")
 def get_subscriptions() -> dict:
-    """Анализ загруженной выписки; если её нет — демо-данные (fallback mock)."""
+    """Анализ загруженной выписки; если её нет — пустое состояние (Empty State)."""
     if _state is not None:
         return _state
-    return demo_payload()
+    # Нет загруженной выписки — возвращаем Empty State (БЕЗ demo_payload).
+    return {
+        "mock": False,
+        "subscriptions": [],
+        "monthly": [],
+        "total_monthly": 0,
+        "total_yearly": 0,
+        "message": "Загрузите выписку, чтобы увидеть найденные подписки",
+    }
 
 
 @app.post("/api/upload")
 async def upload_statement(file: UploadFile = File(...)) -> dict:
-    """Принимает CSV-выписку, ищет подписки и сохраняет результат анализа."""
+    """Принимает CSV/PDF-выписку, ищет подписки и сохраняет результат анализа."""
     global _state
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Файл пуст")
 
+    fname = (file.filename or "").lower()
     try:
-        txs = parse_csv(content)
+        if fname.endswith(".pdf"):
+            txs = parse_pdf(content)
+        elif fname.endswith((".csv", ".txt")):
+            txs = parse_csv(content)
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="Поддерживаются форматы CSV и PDF (выписка СберБанк Онлайн)",
+            )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:  # битый PDF и т.п.
+        raise HTTPException(status_code=422, detail=f"Не удалось разобрать файл: {e}") from e
 
     subs = detect_subscriptions(txs)
     if not subs:
-        # Fallback: файл не дал подписок — показываем демо, UI остаётся презентабельным
-        payload = demo_payload()
-        payload["message"] = ("В выписке не найдено регулярных списаний "
-                              f"({len(txs)} транзакций). Показаны демонстрационные данные")
-        return payload
+        # Файл распарсен, но подписок нет — график показывает РЕАЛЬНЫЕ расходы,
+        # потенциальная экономия = 0 (отменять нечего).
+        _state = {
+            "mock": False,
+            "subscriptions": [],
+            "monthly": monthly_expense_series_all(txs),
+            "total_monthly": 0,
+            "total_yearly": 0,
+            "message": (f"В выписке «{file.filename}» ({len(txs)} транзакций) не найдено "
+                        "регулярных списаний — показаны общие расходы по выписке"),
+        }
+        return _state
 
+    # Подписки найдены — обогащаем их Deep Links (cancel_url) и сохраняем.
+    subs = enrich_subscriptions(subs)
     _state = {
         "mock": False,
         "subscriptions": subs,
@@ -87,6 +124,30 @@ def reset() -> dict:
     global _state
     _state = None
     return {"status": "reset"}
+
+
+@app.get("/api/generate-test")
+def generate_test():
+    """Возвращает тестовую CSV-выписку без подписок (для демонстрации Empty State)."""
+    from fastapi.responses import Response
+    csv_data = generate_test_csv()
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=test_statement.csv"},
+    )
+
+
+@app.get("/api/generate-test-pdf")
+def generate_test_pdf_endpoint():
+    """Возвращает тестовую PDF-выписку без подписок."""
+    from fastapi.responses import Response
+    pdf_data = generate_test_pdf()
+    return Response(
+        content=pdf_data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=test_statement.pdf"},
+    )
 
 
 class LetterRequest(BaseModel):

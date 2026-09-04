@@ -28,3 +28,32 @@ export async function generateLetter(sub) {
   if (!res.ok) throw new Error("Не удалось сгенерировать письмо");
   return res.json();
 }
+
+/**
+ * Генерирует тестовую CSV-выписку без подписок и загружает её на сервер.
+ * Возвращает данные анализа (с пустыми подписками — Empty State).
+ */
+export async function generateTestStatement() {
+  const res = await fetch(`${BASE}/api/generate-test`);
+  if (!res.ok) throw new Error("Не удалось сгенерировать тестовую выписку");
+  const blob = await res.blob();
+
+  // Загружаем blob как файл на /api/upload
+  const form = new FormData();
+  const file = new File([blob], "test_statement.csv", { type: "text/csv" });
+  form.append("file", file);
+  const uploadRes = await fetch(`${BASE}/api/upload`, { method: "POST", body: form });
+  const data = await uploadRes.json().catch(() => ({}));
+  if (!uploadRes.ok) throw new Error(data.detail || "Ошибка загрузки тестовой выписки");
+  return data;
+}
+
+/**
+ * Возвращает Blob URL для PDF-превью тестовой выписки.
+ */
+export async function fetchTestPdfUrl() {
+  const res = await fetch(`${BASE}/api/generate-test-pdf`);
+  if (!res.ok) throw new Error("Не удалось получить PDF-выписку");
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
