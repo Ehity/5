@@ -8,7 +8,7 @@ import SubscriptionCard from "./components/SubscriptionCard.jsx";
 import LetterModal from "./components/LetterModal.jsx";
 import MonthlyChart from "./components/MonthlyChart.jsx";
 import PreviewModal from "./components/PreviewModal.jsx";
-import { fetchSubscriptions, uploadStatement, resetToDemo, generateTestStatement, fetchTestPdfUrl } from "./api.js";
+import { fetchSubscriptions, uploadStatement, resetToDemo, fetchTestPreview, uploadTestToScan } from "./api.js";
 
 export default function App() {
   const [data, setData] = useState(null);
@@ -56,10 +56,9 @@ export default function App() {
 
   async function handleGenerateTest() {
     try {
-      const d = await generateTestStatement();
-      setPreviewData(d);
-      const pdfUrl = await fetchTestPdfUrl();
-      setPreviewPdfUrl(pdfUrl);
+      const prev = await fetchTestPreview();
+      setPreviewData({ csv: prev.csv });
+      setPreviewPdfUrl(prev.pdfUrl);
       setPreviewVisible(true);
     } catch (e) {
       setError(e.message);
@@ -73,15 +72,22 @@ export default function App() {
     setPreviewPdfUrl(null);
   }
 
-  function handleSendToScan() {
+  async function handleSendToScan() {
     if (!previewData) return;
     setPreviewVisible(false);
-    setData(previewData);
+    setCancelled([]);
+    setError(null);
+    try {
+      // Заново сканируем выписку на сервере и используем свежий результат.
+      const result = await uploadTestToScan(previewData.csv);
+      setData(result);
+    } catch (e) {
+      setError(e.message);
+      load();
+    }
     setPreviewData(null);
     if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
     setPreviewPdfUrl(null);
-    setCancelled([]);
-    setError(null);
   }
 
   if (!data) {
@@ -122,6 +128,7 @@ export default function App() {
           onUploaded={handleUploaded}
           onReset={handleReset}
           mock={data.mock}
+          hasRealData={data.subscriptions.length > 0 || data.monthly.some((m) => m.spent > 0)}
           message={data.message}
         />
 
@@ -182,7 +189,7 @@ export default function App() {
 
       {previewVisible && previewData && (
         <PreviewModal
-          csv={previewData.raw_csv || ""}
+          csv={previewData.csv || ""}
           pdfUrl={previewPdfUrl}
           onClose={handleClosePreview}
           onSubmit={handleSendToScan}

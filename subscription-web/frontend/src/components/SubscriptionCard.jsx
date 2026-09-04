@@ -1,4 +1,4 @@
-import { CalendarClock, Repeat, ExternalLink } from "lucide-react";
+import { CalendarClock, Repeat, ExternalLink, PackageCheck } from "lucide-react";
 
 const fmt = (n) => Math.round(n).toLocaleString("ru-RU");
 
@@ -28,6 +28,14 @@ export default function SubscriptionCard({ sub, onCancel }) {
           <div>
             <h3 className="font-semibold text-white">{sub.name}</h3>
             <span className="text-xs text-slate-500">{sub.category}</span>
+            {sub.included_in && (
+              <span
+                className="mt-1 flex w-fit items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-400"
+                title={`Это списание дублирует подписку «${sub.included_in}», за которую вы уже платите`}
+              >
+                <PackageCheck size={11} /> Входит в «{sub.included_in}»
+              </span>
+            )}
           </div>
         </div>
         <span className="flex items-center gap-1 rounded-full bg-slate-800 px-2.5 py-1 text-[11px] text-slate-400">

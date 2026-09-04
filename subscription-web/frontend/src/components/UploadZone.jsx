@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { FileUp, Loader2, RotateCcw, CheckCircle2 } from "lucide-react";
 
-export default function UploadZone({ onUploaded, onReset, mock, message }) {
+export default function UploadZone({ onUploaded, onReset, mock, hasRealData, message }) {
   const inputRef = useRef(null);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -81,7 +81,7 @@ export default function UploadZone({ onUploaded, onReset, mock, message }) {
             </p>
           )}
         </div>
-        {!mock && (
+        {!mock && hasRealData && (
           <button
             onClick={onReset}
             className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white"

@@ -13,6 +13,30 @@ export default function MonthlyChart({ data, mock = true, hasSubscriptions = tru
                             : "Динамика за последние 6 месяцев";
   const label = realData ? "Расходы" : "Подписки";
 
+  // Плоская серия (все месяцы одинаковые) не о чём не говорит — вместо
+  // бессмысленного графика показываем компактную сводку.
+  const spentValues = data.map((d) => d.spent);
+  const isFlat = !realData && data.length > 1 && Math.max(...spentValues) === Math.min(...spentValues);
+
+  if (isFlat) {
+    const monthly = data[data.length - 1]?.spent ?? 0;
+    return (
+      <section className="card flex flex-wrap items-center justify-between gap-6 p-6">
+        <div className="max-w-xl">
+          <h2 className="font-bold text-white">Расходы на подписки стабильны</h2>
+          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+            Каждый месяц списывается одна и та же сумма, поэтому график здесь ничего
+            не добавляет. Отмените лишние подписки — и эта цифра начнёт уменьшаться.
+          </p>
+        </div>
+        <div className="flex items-baseline gap-2 whitespace-nowrap">
+          <span className="text-4xl font-black text-white">{fmt(monthly)}</span>
+          <span className="text-sm text-slate-500">/ мес · {fmt(monthly * 12)} / год</span>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="card p-6">
       <div className="mb-4 flex items-center justify-between">

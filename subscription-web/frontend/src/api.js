@@ -30,30 +30,32 @@ export async function generateLetter(sub) {
 }
 
 /**
- * Генерирует тестовую CSV-выписку без подписок и загружает её на сервер.
- * Возвращает данные анализа (с пустыми подписками — Empty State).
+ * Генерирует тестовую выписку и возвращает её превью (CSV текст + PDF-URL).
  */
-export async function generateTestStatement() {
-  const res = await fetch(`${BASE}/api/generate-test`);
+export async function fetchTestPreview() {
+  const res = await fetch(`${BASE}/api/generate-test-json`);
   if (!res.ok) throw new Error("Не удалось сгенерировать тестовую выписку");
-  const blob = await res.blob();
-
-  // Загружаем blob как файл на /api/upload
-  const form = new FormData();
-  const file = new File([blob], "test_statement.csv", { type: "text/csv" });
-  form.append("file", file);
-  const uploadRes = await fetch(`${BASE}/api/upload`, { method: "POST", body: form });
-  const data = await uploadRes.json().catch(() => ({}));
-  if (!uploadRes.ok) throw new Error(data.detail || "Ошибка загрузки тестовой выписки");
-  return data;
+  const data = await res.json();
+  return { csv: data.csv_text, pdfUrl: base64ToPdfUrl(data.pdf_base64) };
 }
 
 /**
- * Возвращает Blob URL для PDF-превью тестовой выписки.
+ * Загружает CSV-выписку на сервер для сканирования и возвращает результат анализа.
+ * Используется при «Отправить на скан» — заново сканирует с сервера.
  */
-export async function fetchTestPdfUrl() {
-  const res = await fetch(`${BASE}/api/generate-test-pdf`);
-  if (!res.ok) throw new Error("Не удалось получить PDF-выписку");
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
+export async function uploadTestToScan(csvText) {
+  const form = new FormData();
+  const file = new File([new Blob([csvText], { type: "text/csv" })], "test_statement.csv", { type: "text/csv" });
+  form.append("file", file);
+  const res = await fetch(`${BASE}/api/upload`, { method: "POST", body: form });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "Ошибка загрузки тестовой выписки");
+  return data;
+}
+
+function base64ToPdfUrl(b64) {
+  const byteChars = atob(b64);
+  const bytes = new Uint8Array(byteChars.length);
+  for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
 }
