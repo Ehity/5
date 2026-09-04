@@ -1,1 +1,0 @@
-    return chr(10).join(lines) 

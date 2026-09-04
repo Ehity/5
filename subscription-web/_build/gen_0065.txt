@@ -1,1 +1,0 @@
-    tstyle = ParagraphStyle('t', fontName=font, fontSize=13) 

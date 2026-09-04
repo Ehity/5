@@ -1,1 +1,0 @@
-    pdfUrl ? h('iframe', { src: pdfUrl, title: 'statement', className: 'h-[45vh] w-full rounded-lg' }) 

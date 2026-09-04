@@ -1,1 +1,0 @@
-    t = f.read_text(encoding='utf-8') 

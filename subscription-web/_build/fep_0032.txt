@@ -1,1 +1,0 @@
-patch('UploadZone.jsx', 'export default function UploadZone({ onUploaded, onReset, mock, message }) {', 'export default function UploadZone({ onUploaded, onReset, onGenerate, generating, mock, message }) {') 

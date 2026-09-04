@@ -1,1 +1,0 @@
-    return to_csv_text(txs), to_pdf_bytes(txs), txs 

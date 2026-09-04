@@ -1,1 +1,0 @@
-resetold = '  async function handleReset() {' + NL + '    await resetToDemo();' + NL + '    load();' + NL + '  }' 

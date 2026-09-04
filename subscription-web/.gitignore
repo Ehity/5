@@ -1,1 +1,16 @@
-node_modules/ 
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Runtime-артефакты сервера
+*.log
+*.pid
+*.db
+
+# Frontend
+node_modules/
+
+# Черновики
+_build/
+subscription-web/.zcode/

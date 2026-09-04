@@ -1,1 +1,0 @@
-    t = t.replace('    demo_payload,' + NL, '') 

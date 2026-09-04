@@ -1,1 +1,0 @@
-    return 'https://yandex.ru/search/?text=' + query.replace(' ', '+') 

@@ -1,1 +1,0 @@
-    year = d.year + m // 12 

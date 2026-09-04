@@ -1,1 +1,0 @@
-        return CANCEL_LINKS[service_name] 

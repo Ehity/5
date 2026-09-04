@@ -1,1 +1,0 @@
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })); 

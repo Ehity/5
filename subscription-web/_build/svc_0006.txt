@@ -1,1 +1,0 @@
-    'Telegram Premium': 'https://t.me/PremiumBot', 

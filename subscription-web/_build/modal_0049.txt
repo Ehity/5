@@ -1,1 +1,0 @@
-    h('p', { className: 'text-xs text-slate-600' }, 'Blob in memory'), 

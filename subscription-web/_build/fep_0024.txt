@@ -1,1 +1,0 @@
-patch('App.jsx', '  const [cancelled, setCancelled] = useState(' + Q + '[]' + Q + ');', '  const [cancelled, setCancelled] = useState(' + Q + '[]' + Q + ');' + NL + '  const [preview, setPreview] = useState(null);' + NL + '  const [scanning, setScanning] = useState(false);' + NL + '  const [generating, setGenerating] = useState(false);') 

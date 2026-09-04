@@ -1,1 +1,0 @@
-patch('UploadZone.jsx', '        {!mock' + chr(38) + ' (', genbtn + NL + '        {!mock' + chr(38) + ' (') 

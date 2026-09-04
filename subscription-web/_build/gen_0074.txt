@@ -1,1 +1,0 @@
-    table = Table(data, colWidths=[24 * mm, 18 * mm, 105 * mm, 35 * mm], repeatRows=1) 

@@ -1,1 +1,0 @@
-  const thead = h('thead', { className: 'bg-slate-800/70 text-xs uppercase text-slate-400' }, 

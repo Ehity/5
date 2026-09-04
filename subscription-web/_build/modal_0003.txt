@@ -1,1 +1,0 @@
-const fmt = function (n) { return Math.round(n).toLocaleString('ru-RU'); }; 

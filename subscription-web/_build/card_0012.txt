@@ -1,1 +1,0 @@
-  return h('div', { className: 'card group p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-600 hover:shadow-xl hover:shadow-black/40' }, 

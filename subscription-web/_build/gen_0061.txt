@@ -1,1 +1,0 @@
-        pdfmetrics.registerFont(TTFont('ArialRu', r'C:\Windows\Fonts\arial.ttf')) 

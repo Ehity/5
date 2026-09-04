@@ -1,1 +1,0 @@
-    t = t.replace('@app.post(' + Q + '/api/reset' + Q + ')', ep + '@app.post(' + Q + '/api/reset' + Q + ')') 

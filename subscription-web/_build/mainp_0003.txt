@@ -1,1 +1,0 @@
-t = p.read_text(encoding='utf-8') 

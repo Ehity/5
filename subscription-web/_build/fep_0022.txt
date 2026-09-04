@@ -1,1 +1,0 @@
-patch('App.jsx', 'import { useEffect, useState } from ' + Q + 'react' + Q + ';', 'import { useEffect, useState, createElement as h } from ' + Q + 'react' + Q + ';') 

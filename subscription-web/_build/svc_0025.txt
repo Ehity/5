@@ -1,1 +1,0 @@
-        s['cancel_url'] = get_cancel_url(s.get('name', '')) 

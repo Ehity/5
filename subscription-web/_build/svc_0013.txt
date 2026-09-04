@@ -1,1 +1,0 @@
-    'iCloud+': 'https://appleid.apple.com/', 

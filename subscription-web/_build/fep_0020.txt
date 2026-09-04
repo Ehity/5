@@ -1,1 +1,0 @@
-    f.write_text(t + NL + NL.join(j) + NL, encoding='utf-8') 

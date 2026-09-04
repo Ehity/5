@@ -1,1 +1,0 @@
-    props.scanning ? h(Loader2, { size: 16, className: 'animate-spin' }) : h(Send, { size: 16 }), 

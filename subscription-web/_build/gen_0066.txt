@@ -1,1 +1,0 @@
-    sstyle = ParagraphStyle('s', fontName=font, fontSize=8, leading=11) 

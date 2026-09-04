@@ -1,1 +1,0 @@
-  const footBlock = h('div', { className: 'mt-4 flex items-center justify-between' }, 

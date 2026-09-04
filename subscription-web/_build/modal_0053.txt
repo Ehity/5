@@ -1,1 +1,0 @@
-      headBlock, tabsBlock, tab === 'csv' ? csvBlock : pdfBlock, footBlock)); 

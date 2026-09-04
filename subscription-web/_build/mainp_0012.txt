@@ -1,1 +1,0 @@
-    t = t.replace('    return demo_payload()', '    return {' + Q + 'mock' + Q + ': True, ' + Q + 'empty' + Q + ': True, ' + Q + 'subscriptions' + Q + ': [], ' + Q + 'monthly' + Q + ': [], ' + Q + 'total_monthly' + Q + ': 0, ' + Q + 'total_yearly' + Q + ': 0, ' + Q + 'message' + Q + ': ' + repr(MSG) + '}') 

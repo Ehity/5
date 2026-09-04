@@ -1,1 +1,0 @@
-    h('div', { className: 'flex gap-2' }, closeBtn, sendBtn)); 

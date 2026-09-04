@@ -1,1 +1,0 @@
-  const tbody = h('tbody', {}, rows); 

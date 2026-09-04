@@ -1,1 +1,0 @@
-    txs = generate_test_transactions() 

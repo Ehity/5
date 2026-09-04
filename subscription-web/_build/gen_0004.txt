@@ -1,1 +1,0 @@
-# (base_amount, day_of_month, variants separated by pipe) 

@@ -1,1 +1,0 @@
-            txs.append({'date': d.isoformat(), 'amount': round(base_amount, 2), 
