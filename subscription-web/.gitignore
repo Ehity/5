@@ -13,4 +13,4 @@ node_modules/
 
 # Черновики
 _build/
-subscription-web/.zcode/
+.zcode/

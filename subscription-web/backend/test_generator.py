@@ -62,18 +62,24 @@ def _add_months(d, months):
 
 
 def generate_test_csv():
-    rng = random.Random(42)
+    rng = random.Random()
     today = date.today()
     rows = []
 
-    # Подписки из SERVICES
-    for base_amount, day, name in SERVICES:
+    # Подписки из SERVICES: лёгкий jitter суммы + редкие пропуски месяца,
+    # чтобы график был слегка «волнистым», а экономия чуть менялась.
+    for base_amount, day_n, name in SERVICES:
         for i in range(6, -1, -1):
-            d = _add_months(today.replace(day=min(day, 28)), -i)
+            d = _add_months(today.replace(day=min(day_n, 28)), -i)
             d = d + timedelta(days=rng.randint(-2, 2))
             if (d - today).days > 0:
                 d = d - timedelta(days=rng.randint(25, 31))
-            rows.append((d, name, -abs(base_amount), "Subscription"))
+            # ~18% месяцев пропускаем списание (сервис «выпал» на месяц)
+            if rng.random() < 0.18:
+                continue
+            # jitter: -15% .. +15% от базовой суммы, чтобы график был «волнистым»
+            jitter = base_amount * rng.uniform(0.85, 1.15)
+            rows.append((d, name, -round(abs(jitter), 2), "Subscription"))
 
     # Шум
     for i in range(6):
@@ -112,7 +118,6 @@ def generate_test_pdf():
     c.setFont("Helvetica", 10)
     y -= 20
     csv_data = generate_test_csv().decode("utf-8")
-    random.seed(42)
     for line in csv_data.split("\n"):
         if not line or y < 50:
             break
@@ -122,7 +127,7 @@ def generate_test_pdf():
         d, desc, amt, cat = parts
         color = (0.2, 0.5, 0.2) if cat == "Subscription" else (0.5, 0.5, 0.5)
         c.setFillColorRGB(*color)
-        c.drawString(50, y, d)
+        c.drawString(50, y, ".".join(reversed(d.split("-"))))
         c.drawString(150, y, desc[:40])
         c.drawString(400, y, f"{amt} RUB")
         c.setFillColorRGB(0, 0, 0)
@@ -130,12 +135,15 @@ def generate_test_pdf():
 
     c.showPage()
     c.save()
-    return buf.getvalue()import base64 
-def generate_test_with_data(): 
-csv_bytes=generate_test_csv() 
-return {'csv_text':csv_bytes.decode('utf-8'),'pdf_base64':base64.b64encode(generate_test_pdf()).decode()} 
- 
- 
-import base64 
-    csv_bytes=generate_test_csv() 
-    return {'csv_text':csv_bytes.decode('utf-8'),'pdf_base64':base64.b64encode(generate_test_pdf()).decode()} 
+    return buf.getvalue()
+
+
+import base64
+
+
+def generate_test_with_data():
+    csv_bytes = generate_test_csv()
+    return {
+        "csv_text": csv_bytes.decode("utf-8"),
+        "pdf_base64": base64.b64encode(generate_test_pdf()).decode(),
+    }
