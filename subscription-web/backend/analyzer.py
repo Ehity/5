@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import random
 import re
 from datetime import date, datetime, timedelta
 
@@ -15,28 +16,69 @@ from datetime import date, datetime, timedelta
 BRAND_RULES = [
     # «Яндекс Плюс» — только точечные ключи (общий «ЯНДЕКС» ловит и такси/кино)
     ("Яндекс Плюс", "Развлечения", "🟡",
-     ["YNDX", "YANDEX_PLUS", "YANDEX PLUS", "ЯНДЕКС.ПЛЮС", "ЯНДЕКС ПЛЮС", "ЯНДЕКС+"]),
+     ["YNDX", "YANDEX_PLUS", "YANDEX PLUS", "ЯНДЕКС.ПЛЮС", "ЯНДЕКС ПЛЮС",
+      "ЯНДЕКС+", "YANDEX.MUSIC", "ПЛЮС МУЗЫК", "МУЗЫКА ПЛЮС"]),
     ("Netflix", "Кино и видео", "🎬",
      ["NETFLIX", "NFLX"]),
     ("Иви", "Кино и видео", "🍿",
-     ["IVI"]),
+     ["IVI", "ИВИ"]),
     ("Кинопоиск", "Кино и видео", "🎥",
-     ["КИНОПОИСК", "KINOPOISK"]),
+     ["КИНОПОИСК", "KINOPOISK", "KP*"]),
+    ("Okko", "Кино и видео", "🎞️",
+     ["OKKO", "ОККО"]),
+    ("KION", "Кино и видео", "🎬",
+     ["KION", "КИОН"]),
+    ("Premier", "Кино и видео", "📺",
+     ["PREMIER", "ПРЕМЬЕР"]),
+    ("Амедиатека", "Кино и видео", "🍿",
+     ["AMEDIATEKA", "АМЕДИАТЕКА"]),
+    ("More.tv", "Кино и видео", "📺",
+     ["MORE.TV", "MORETV", "МОР ТВ"]),
+    ("Start", "Кино и видео", "▶️",
+     ["START.RU", "START TV"]),
+    ("Wink", "Кино и видео", "📺",
+     ["WINK", "ВИНК"]),
+    ("Megogo", "Кино и видео", "🎬",
+     ["MEGOGO", "МЕГОГО"]),
     ("Spotify", "Музыка", "🎧",
      ["SPOTIFY", "SPOT*"]),
-    ("WORLD CLASS", "Фитнес", "🏋️",
-     ["WORLD CLASS", "WORLDCLASS", "ФИТНЕС"]),
-    ("iCloud+", "Облако", "☁️",
-     ["ICLOUD", "APPLE.COM/BILL"]),
+    ("Звук", "Музыка", "🎵",
+     ["ЗВУК", "ZVUK"]),
+    ("Apple Music", "Музыка", "🍎",
+     ["APPLE MUSIC", "APPLE.COM/BILLAPPLEMUSIC"]),
     ("VK Музыка", "Музыка", "🎵",
-     ["VK MUZ", "VK MUSIC", "МУЗЫКА VK"]),
+     ["VK MUZ", "VK MUSIC", "МУЗЫКА VK", "VK.COM/MUSIC", "VK.COM", "SUBSCRIPTION VK"]),
     ("YouTube Premium", "Развлечения", "▶️",
-     ["YOUTUBE"]),
+     ["YOUTUBE", "GOOGLE*YOUTUBE"]),
+    ("Telegram Premium", "Мессенджеры", "✈️",
+     ["TG_PREMIUM", "TELEGRAM PREMIUM", "PREMIUMBOT", "T.G PREMIUM", "TEL.EGRAM"]),
+    ("WORLD CLASS", "Фитнес", "🏋️",
+     ["WORLD CLASS", "WORLDCLASS", "ФИТНЕС", "WORLD CLUB"]),
     ("СберПрайм", "Экосистема", "🟢",
      ["СБЕРПРАЙМ", "SBERPRIME", "ПРАЙМ"]),
+    ("Яндекс Go", "Транспорт", "🚕",
+     ["YANDEX GO", "ЯНДЕКС ТАКСИ", "ЯНДЕКС ГО", "TAXI"]),
+    ("iCloud+", "Облако", "☁️",
+     ["ICLOUD", "APPLE.COM/BILL"]),
+    ("Google One", "Облако", "🌐",
+     ["GOOGLE ONE", "GOOGLE ONEAI"]),
+    ("Microsoft 365", "ПО", "💻",
+     ["MICROSOFT 365", "MICROSOFT OFFICE", "OFFICE 365"]),
+    ("Adobe", "ПО", "🎨",
+     ["ADOBE", "CREATIVE CLOUD"]),
+    ("Canva Pro", "Дизайн", "🎨",
+     ["CANVA"]),
+    ("Figma", "Дизайн", "🎨",
+     ["FIGMA"]),
+    ("Notion", "ПО", "🗂️",
+     ["NOTION"]),
 ]
 
+
 ABBREV_MAP = {"NFLX": "NETFLIX", "SPOT": "SPOTIFY", "YNDX": "YANDEX"}
+
+STOP_WORDS = {"RU", "US", "COM", "ORG", "NET", "HTTP", "HTTPS", "WWW", "THE", "AND", "FOR", "LLC", "INC", "LTD", "GMBH"}
+
 
 
 def canonical_name(description: str) -> tuple[str, str, str] | None:
@@ -49,24 +91,17 @@ def canonical_name(description: str) -> tuple[str, str, str] | None:
 
 
 def normalize_description(desc: str) -> str:
-    """Нормализация для fallback-группировки безымянных мерчантов."""
     s = str(desc).upper()
-    s = re.sub(r"HTTPS?://\S+|WWW\.\S+", " ", s)
-    s = re.sub(r"\S*\d\S*", " ", s)            # токены с цифрами
-    s = re.sub(r"\.[A-ZА-ЯЁ]{2,3}\b", " ", s)  # домены
-    s = re.sub(r"[^A-ZА-ЯЁ ]+", " ", s)
-    tokens = [ABBREV_MAP.get(t, t) for t in s.split() if len(t) >= 2]
-    return " ".join(tokens).strip()
-
-
-# ---------------------------------------------------------------------------
-# Парсинг CSV
-# ---------------------------------------------------------------------------
-COLUMN_ALIASES = {
-    "date": ["date", "дата", "дата операции", "дата платежа"],
-    "amount": ["amount", "сумма", "сумма платежа", "списание", "charges"],
-    "description": ["description", "описание", "назначение", "контрагент", "получатель", "merchant"],
-}
+    s = re.sub(r"HTTPS?://\\S+|WWW\\.\\S+", " ", s)
+    s = re.sub(r"\\S*\\d\\S*", " ", s)            # убираем всё с цифрами
+    s = re.sub(r"\\.[\u0410-\u042f\u0401]{2,3}\\b", " ", s)  # домены
+    s = re.sub(r"[^A-Z\u0410-\u042f\u0401 ]+", " ", s)
+    tokens = [
+        ABBREV_MAP.get(t, t)
+        for t in s.split()
+        if t not in STOP_WORDS and len(t) > 1
+    ]
+    return " ".join(tokens)
 
 
 def _parse_date(s: str) -> date | None:
@@ -76,6 +111,14 @@ def _parse_date(s: str) -> date | None:
         except ValueError:
             continue
     return None
+
+
+COLUMN_ALIASES = {
+    "date": ["date", "дата операции", "дата", "дата платежа", "operation date"],
+    "amount": ["amount", "сумма", "сумма платежа", "сумма операции", "списание"],
+    "description": ["description", "описание", "наименование", "получатель", "merchant"],
+    "category": ["category", "категория", "тип"],
+}
 
 
 def parse_csv(content: bytes) -> list[dict]:
@@ -106,7 +149,7 @@ def parse_csv(content: bytes) -> list[dict]:
             if alias in cols:
                 pick[kind] = cols[alias]
                 break
-    if set(pick) != {"date", "amount", "description"}:
+    if not {"date", "amount", "description"}.issubset(pick):
         raise ValueError(f"В CSV нет нужных колонок, найдены: {list(rows[0].keys())}")
 
     txs = []
@@ -195,7 +238,13 @@ def _transactions_from_lines(lines: list[str]) -> list[dict]:
       2) однострочный:          '05.08.2026  NETFLIX.COM  -599,00 ₽'
     """
     has_currency = any(("₽" in l or "руб" in l or "RUB" in l) for l in lines)
-    strict = has_currency  # строгий режим — если в выписке есть знак валюты
+    # строгий режим — только когда в выписке реально есть знак минус в сумме.
+
+    # беззнаковые суммы (напр. "599.0 RUB") парсятся свободным режимом,
+    # чтобы тестовые PDF-выписки не теряли транзакции вообще.
+    strict = has_currency and any(
+        _parse_money(l, True)[0] in "−–-" for l in lines
+    )
 
     # если в выписке есть хоть один минус — берём только списания,
     # иначе (все суммы без знака) — берём всё (разделить нельзя)
@@ -284,21 +333,86 @@ def _add_months(d: date, months: int) -> date:
     return date(year, month, day)
 
 
+def _dice(a: str, b: str) -> float:
+    """Dice-коэффициент по биграммам — примитивная «эмбеддинг»-близость имён."""
+    a = a.lower().replace("_", " ").replace(".", " ").replace("*", " ").split()
+    b = b.lower().replace("_", " ").replace(".", " ").replace("*", " ").split()
+    sa = set("".join(a))
+    sb = set("".join(b))
+    if not sa or not sb:
+        return 0.0
+    return 2.0 * len(sa & sb) / (len(sa) + len(sb))
+
+
+def _canonical_group_key(desc: str) -> tuple:
+    """Ключ группы: известный бренд либо нормализованное имя."""
+    canon = canonical_name(desc)
+    if canon:
+        return ("brand", canon[0])
+    return ("norm", normalize_description(desc))
+
+
+def _stable_charges(items: list[dict], tol: float = 0.15) -> tuple[list[dict], float]:
+    """Отбирает списания со стабильной ценой: (списания, актуальная цена).
+
+    Суммы кластеризуются с допуском ±15%, так что переживается смена цены
+    (первые месяцы по 99 ₽, дальше полные 300 ₽): ценовой уровень участвует,
+    если в нём ≥2 списания ИЛИ это самый свежий уровень. Актуальная цена —
+    медиана кластера, к которому относится последнее по дате списание.
+    """
+    by_amount = sorted(items, key=lambda t: t["amount"])
+    clusters: list[list[dict]] = [[by_amount[0]]]
+    for t in by_amount[1:]:
+        base = clusters[-1][len(clusters[-1]) // 2]["amount"]
+        if abs(t["amount"] - base) <= abs(base) * tol:
+            clusters[-1].append(t)
+        else:
+            clusters.append([t])
+
+    newest = max(items, key=lambda t: t["date"])
+    recurring = [c for c in clusters if len(c) >= 2 or newest in c]
+    stable = [t for c in recurring for t in c]
+    if not stable:
+        return [], 0.0
+    stable.sort(key=lambda t: t["date"])
+
+    current_cluster = next(c for c in recurring if stable[-1] in c)
+    amounts = sorted(abs(t["amount"]) for t in current_cluster)
+    return stable, amounts[len(amounts) // 2]
+
+
 def detect_subscriptions(txs: list[dict]) -> list[dict]:
     groups: dict[tuple, list[dict]] = {}
+    norm_keys: list[tuple] = []
     for t in txs:
-        canon = canonical_name(t["description"])
-        key = ("brand", canon[0]) if canon else ("norm", normalize_description(t["description"]))
+        key = _canonical_group_key(t["description"])
+        if key[0] == "norm":
+            # эвристика: слепляем близкие нормализованные имена (YNDX_PLUS vs YANDEX PLUS)
+            merged = None
+            for other in norm_keys:
+                if _dice(other[1], key[1]) >= 0.8:
+                    merged = other
+                    break
+            if merged is not None:
+                key = merged
+            else:
+                norm_keys.append(key)
         groups.setdefault(key, []).append(t)
+
+    # Небольшой «glue» между группами: если норм-имя очень близко к бренду — слить бренд
+    for norm_key in list(norm_keys):
+        for brand_name, _cat, _icons, _keys in BRAND_RULES:
+            if _dice(norm_key[1], brand_name) >= 0.75:
+                groups.setdefault(("brand", brand_name), []).extend(groups.pop(norm_key, []))
+                break
 
     subs = []
     for key, items in groups.items():
-        if len(items) < 3:  # минимум 3 списания, чтобы отличать подписку от случайных совпадений
+        min_events = 2 if key[0] == "brand" else 3  # брендовые сервисы достаточны уже с 2 списаниями
+        if len(items) < min_events:  # минимум списаний, чтобы отличать подписку от случайных совпадений
             continue
-        amounts = sorted(i["amount"] for i in items)
-        median = amounts[len(amounts) // 2]
-        stable = [i for i in items if abs(i["amount"] - median) <= abs(median) * 0.15]
-        if len(stable) < 3:
+        stable, price = _stable_charges(items)
+        if len(stable) < min_events:
             continue
         stable.sort(key=lambda t: t["date"])
         gaps = sorted((stable[i + 1]["date"] - stable[i]["date"]).days
@@ -318,7 +432,8 @@ def detect_subscriptions(txs: list[dict]) -> list[dict]:
             continue
 
         last = stable[-1]["date"]
-        monthly = median if period == "monthly" else median / 12
+        price = abs(price)
+        monthly = price if period == "monthly" else price / 12
         title = key[1] if key[0] == "brand" else key[1].title() or "Подписка"
         name, cat, icon = canonical_name(stable[-1]["description"]) or (title, "Прочее", "💳")
         subs.append({
@@ -326,7 +441,7 @@ def detect_subscriptions(txs: list[dict]) -> list[dict]:
             "name": name if key[0] == "brand" else title,
             "category": cat,
             "icon": icon,
-            "amount": round(median, 2),
+            "amount": round(price, 2),
             "period": "ежемесячно" if period == "monthly" else "ежегодно",
             "monthly_cost": round(monthly, 2),
             "yearly_cost": round(monthly * 12, 2),
@@ -336,7 +451,7 @@ def detect_subscriptions(txs: list[dict]) -> list[dict]:
             "next_charge": _add_months(last, 1 if period == "monthly" else 12).isoformat(),
             "merchants": sorted({t["description"] for t in stable}),
         })
-    subs.sort(key=lambda s: -s["monthly_cost"])
+    subs.sort(key=lambda s: -abs(s["monthly_cost"]))
     return subs
 
 
@@ -350,10 +465,10 @@ def monthly_expense_series(subs: list[dict], months: int = 6) -> list[dict]:
         for s in subs:
             cur = date.fromisoformat(s["first_charge"])
             for _ in range(240):
-                if cur > d:
+                if (cur.year, cur.month) > (d.year, d.month):
                     break
                 if cur.month == d.month and cur.year == d.year:
-                    total += s["monthly_cost"]
+                    total += abs(s["monthly_cost"])
                 cur = _add_months(cur, 1)
         series.append({"month": d.strftime("%m.%Y"), "spent": round(total, 2)})
     return series
@@ -382,19 +497,24 @@ def monthly_expense_series_all(txs: list[dict], months: int = 6) -> list[dict]:
 # ---------------------------------------------------------------------------
 def demo_payload() -> dict:
     today = date.today()
+    rng = random.Random()
 
+    # Слегка варьируем суммы подписок (±10%), чтобы экономия была разной
     subs = [
-        _demo_sub("world_class", "WORLD CLASS", "Фитнес", "🏋️", 3490.0, today, -7, 23),
-        _demo_sub("netflix", "Netflix", "Кино и видео", "🎬", 599.0, today, -7, 23),
-        _demo_sub("yandex_plus", "Яндекс Плюс", "Развлечения", "🟡", 399.0, today, -7, 23),
-        _demo_sub("ivi", "Иви", "Кино и видео", "🍿", 299.0, today, -7, 23),
-        _demo_sub("icloud", "iCloud+", "Облако", "☁️", 149.0, today, -7, 23),
+        _demo_sub("world_class", "WORLD CLASS", "Фитнес", "🏋️", round(3490.0 * rng.uniform(0.9, 1.1), -1), today, -7, 23),
+        _demo_sub("netflix", "Netflix", "Кино и видео", "🎬", round(599.0 * rng.uniform(0.9, 1.1), -1), today, -7, 23),
+        _demo_sub("yandex_plus", "Яндекс Плюс", "Развлечения", "🟡", round(399.0 * rng.uniform(0.9, 1.1), -1), today, -7, 23),
+        _demo_sub("ivi", "Иви", "Кино и видео", "🍿", round(299.0 * rng.uniform(0.9, 1.1), -1), today, -7, 23),
+        _demo_sub("icloud", "iCloud+", "Облако", "☁️", round(149.0 * rng.uniform(0.9, 1.1), -1), today, -7, 23),
     ]
     total_monthly = round(sum(s["monthly_cost"] for s in subs), 2)
+
+    # Волнистый график: каждый месяц ±15-30% от базовой суммы
+    base = total_monthly
     series = []
     for i in range(5, -1, -1):
         d = _add_months(today.replace(day=1), -i)
-        jitter = [4936, 4936, 5235, 4936, 5335, 4936][5 - i]
+        jitter = round(base * rng.uniform(0.7, 1.3), 2)
         series.append({"month": d.strftime("%m.%Y"), "spent": jitter})
 
     return {
