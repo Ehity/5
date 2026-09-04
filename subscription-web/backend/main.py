@@ -27,7 +27,8 @@ from analyzer import (
     parse_pdf,
 )
 from services_db import enrich_subscriptions
-from test_generator import generate_test_csv, generate_test_pdf
+from storage import clear_state, load_state, save_state
+from test_generator import generate_test_csv, generate_test_pdf, generate_test_with_data
 
 app = FastAPI(title="Сбер.Сканер Подписок API", version="1.0.0")
 
@@ -41,8 +42,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Состояние анализа в памяти процесса (для MVP достаточно)
-_state: dict | None = None
+# Результат последнего анализа хранится в SQLite (scanner.db, см. storage.py)
+# и переживает перезапуск сервера.
 
 
 @app.get("/api/health")
@@ -53,8 +54,9 @@ def health() -> dict:
 @app.get("/api/subscriptions")
 def get_subscriptions() -> dict:
     """Анализ загруженной выписки; если её нет — пустое состояние (Empty State)."""
-    if _state is not None:
-        return _state
+    state = load_state()
+    if state is not None:
+        return state
     # Нет загруженной выписки — возвращаем Empty State (БЕЗ demo_payload).
     return {
         "mock": False,
@@ -69,7 +71,6 @@ def get_subscriptions() -> dict:
 @app.post("/api/upload")
 async def upload_statement(file: UploadFile = File(...)) -> dict:
     """Принимает CSV/PDF-выписку, ищет подписки и сохраняет результат анализа."""
-    global _state
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Файл пуст")
@@ -94,7 +95,7 @@ async def upload_statement(file: UploadFile = File(...)) -> dict:
     if not subs:
         # Файл распарсен, но подписок нет — график показывает РЕАЛЬНЫЕ расходы,
         # потенциальная экономия = 0 (отменять нечего).
-        _state = {
+        result = {
             "mock": False,
             "subscriptions": [],
             "monthly": monthly_expense_series_all(txs),
@@ -103,26 +104,27 @@ async def upload_statement(file: UploadFile = File(...)) -> dict:
             "message": (f"В выписке «{file.filename}» ({len(txs)} транзакций) не найдено "
                         "регулярных списаний — показаны общие расходы по выписке"),
         }
-        return _state
+        save_state(result)
+        return result
 
     # Подписки найдены — обогащаем их Deep Links (cancel_url) и сохраняем.
     subs = enrich_subscriptions(subs)
-    _state = {
+    result = {
         "mock": False,
         "subscriptions": subs,
         "monthly": monthly_expense_series(subs),
-        "total_monthly": round(sum(s["monthly_cost"] for s in subs), 2),
-        "total_yearly": round(sum(s["yearly_cost"] for s in subs), 2),
+        "total_monthly": round(sum(abs(s["monthly_cost"]) for s in subs), 2),
+        "total_yearly": round(sum(abs(s["yearly_cost"]) for s in subs), 2),
         "message": f"Выписка «{file.filename}»: {len(txs)} транзакций, найдено подписок: {len(subs)}",
     }
-    return _state
+    save_state(result)
+    return result
 
 
 @app.post("/api/reset")
 def reset() -> dict:
-    """Сбрасывает загруженную выписку, возвращает сервис в демо-режим."""
-    global _state
-    _state = None
+    """Сбрасывает загруженную выписку, возвращает сервис в исходное состояние."""
+    clear_state()
     return {"status": "reset"}
 
 
@@ -148,6 +150,16 @@ def generate_test_pdf_endpoint():
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=test_statement.pdf"},
     )
+
+
+@app.get("/api/generate-test-json")
+def generate_test_json():
+    """Возвращает тестовую выписку для превью: CSV-текст + PDF (base64)."""
+    data = generate_test_with_data()
+    return {
+        "csv_text": data["csv_text"],
+        "pdf_base64": data["pdf_base64"],
+    }
 
 
 class LetterRequest(BaseModel):
