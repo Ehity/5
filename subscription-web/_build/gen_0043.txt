@@ -1,0 +1,1 @@
+    txs.sort(key=lambda t: t['date']) 

@@ -1,0 +1,1 @@
+                d = d - timedelta(days=rng.randint(4, 8)) 

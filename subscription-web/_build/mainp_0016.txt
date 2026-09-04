@@ -1,0 +1,1 @@
+    p.write_text(t, encoding='utf-8') 

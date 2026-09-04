@@ -1,0 +1,1 @@
+def enrich_subscriptions(subs): 

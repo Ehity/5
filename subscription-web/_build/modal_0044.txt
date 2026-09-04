@@ -1,0 +1,1 @@
+    h('button', { onClick: props.onClose, className: 'rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-800 hover:text-white' }, h(X, { size: 20 }))); 

@@ -1,0 +1,1 @@
+    return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear(); 

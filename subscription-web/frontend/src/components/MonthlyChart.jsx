@@ -5,13 +5,20 @@ import {
 
 const fmt = (n) => `${Math.round(n).toLocaleString("ru-RU")} ₽`;
 
-export default function MonthlyChart({ data }) {
+export default function MonthlyChart({ data, mock = true, hasSubscriptions = true }) {
+  // Если подписок нет и данные реальные (не демо) — показываем общие расходы
+  const realData = !mock && !hasSubscriptions;
+  const title = realData ? "Общие расходы по выписке" : "Расходы на подписки по месяцам";
+  const subtitle = realData ? "Списания по всем транзакциям за последние 6 месяцев"
+                            : "Динамика за последние 6 месяцев";
+  const label = realData ? "Расходы" : "Подписки";
+
   return (
     <section className="card p-6">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h2 className="font-bold text-white">Расходы на подписки по месяцам</h2>
-          <p className="text-xs text-slate-500">Динамика за последние 6 месяцев</p>
+          <h2 className="font-bold text-white">{title}</h2>
+          <p className="text-xs text-slate-500">{subtitle}</p>
         </div>
       </div>
       <div className="h-64">
@@ -32,7 +39,7 @@ export default function MonthlyChart({ data }) {
                 background: "#0E1526", border: "1px solid #1E293B",
                 borderRadius: 12, color: "#E2E8F0",
               }}
-              formatter={(v) => [fmt(v), "Расходы"]}
+              formatter={(v) => [fmt(v), label]}
             />
             <Area type="monotone" dataKey="spent" stroke="#21A038" strokeWidth={2.5}
                   fill="url(#sberFill)" />

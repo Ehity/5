@@ -1,0 +1,1 @@
+  const rows = txs.map(function (t, i) { 

@@ -1,0 +1,1 @@
+    t = t.replace('from analyzer import (', 'import base64' + NL + 'import test_generator as test_gen' + NL + 'from services_db import enrich_subscriptions' + NL + 'from analyzer import (') 

@@ -1,0 +1,103 @@
+INFO:     Started server process [19232]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:60268 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57184 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57184 - "GET /assets/index-C2YAp0Lw.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:57184 - "GET /assets/index-Ct1joe4T.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:57184 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62900 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62900 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62900 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63026 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63026 - "GET /assets/index-C2YAp0Lw.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:52865 - "GET /assets/index-Ct1joe4T.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:52865 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50379 - "POST /api/reset HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50379 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50379 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50379 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50379 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55619 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55619 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55619 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54160 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54160 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54160 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52442 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52442 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52442 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55855 - "POST /api/upload HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:59438 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54676 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49837 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49837 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49837 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53129 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53129 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53129 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60309 - "POST /api/reset HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60309 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63050 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63050 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63050 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54790 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60008 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49755 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49756 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49757 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49758 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49759 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57055 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57055 - "GET /assets/index-C2YAp0Lw.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:50497 - "GET /assets/index-Ct1joe4T.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:50497 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "POST /api/reset HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "POST /api/reset HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "POST /api/reset HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50497 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52986 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52986 - "GET /assets/index-C2YAp0Lw.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:59100 - "GET /assets/index-Ct1joe4T.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:59100 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59100 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59100 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59100 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50584 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50585 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64967 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64968 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64969 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56403 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56404 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56405 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62695 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62695 - "GET /assets/index-C2YAp0Lw.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62663 - "GET /assets/index-Ct1joe4T.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62663 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62663 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62663 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62663 - "GET /api/generate-test-pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55301 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51237 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51243 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51244 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51245 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50310 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50314 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52562 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52566 - "GET /api/subscriptions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53698 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61642 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63876 - "GET /api/generate-test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63877 - "POST /api/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63878 - "GET /api/subscriptions HTTP/1.1" 200 OK

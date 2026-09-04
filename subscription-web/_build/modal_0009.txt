@@ -1,0 +1,1 @@
+    const bytes = Uint8Array.from(atob(preview.pdf_base64), function (c) { return c.charCodeAt(0); }); 

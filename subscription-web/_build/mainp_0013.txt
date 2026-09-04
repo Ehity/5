@@ -1,0 +1,1 @@
+    t = t.replace('    _state = {', '    _state = enrich_subscriptions({') 

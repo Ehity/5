@@ -1,0 +1,1 @@
+    'VK Combo': 'https://id.vk.com/pay/subscriptions', 

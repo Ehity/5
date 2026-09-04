@@ -1,0 +1,1 @@
+patch('App.jsx', '  const active = data.subscriptions.filter((s) =' + GT + ' !cancelled.includes(s.id));', emptystate + '  const active = data.subscriptions.filter((s) =' + GT + ' !cancelled.includes(s.id));') 

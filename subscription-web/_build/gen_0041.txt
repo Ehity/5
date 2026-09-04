@@ -1,0 +1,1 @@
+            txs.append({'date': d.isoformat(), 'amount': round(rng.uniform(150, 3500), 2), 

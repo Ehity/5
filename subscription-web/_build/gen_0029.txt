@@ -1,0 +1,1 @@
+            d = _add_months(today.replace(day=min(day, 28)), -i) 

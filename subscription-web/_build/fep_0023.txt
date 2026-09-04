@@ -1,0 +1,1 @@
+patch('App.jsx', 'import { fetchSubscriptions, uploadStatement, resetToDemo } from ' + Q + './api.js' + Q + ';', 'import { fetchSubscriptions, uploadStatement, resetToDemo, generateTest, scanGenerated } from ' + Q + './api.js' + Q + ';' + NL + 'import PreviewModal from ' + Q + './components/PreviewModal.jsx' + Q + ';') 

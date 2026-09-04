@@ -9,8 +9,8 @@ export default function UploadZone({ onUploaded, onReset, mock, message }) {
 
   async function handleFile(file) {
     if (!file) return;
-    if (!/\.(csv|txt)$/i.test(file.name) && file.type !== "text/csv") {
-      setError("Пока поддерживается CSV. PDF-парсер — в следующем релизе 😉");
+    if (!/\.(csv|txt|pdf)$/i.test(file.name) && !["text/csv", "application/pdf"].includes(file.type)) {
+      setError("Поддерживаются форматы CSV и PDF (выписка СберБанк Онлайн)");
       return;
     }
     setLoading(true);
@@ -48,7 +48,7 @@ export default function UploadZone({ onUploaded, onReset, mock, message }) {
         <input
           ref={inputRef}
           type="file"
-          accept=".csv,text/csv"
+          accept=".csv,.txt,.pdf,text/csv,application/pdf"
           className="hidden"
           onChange={(e) => handleFile(e.target.files?.[0])}
         />
@@ -63,7 +63,7 @@ export default function UploadZone({ onUploaded, onReset, mock, message }) {
           {loading ? "Анализируем выписку…" : "Перетащите выписку или нажмите"}
         </h3>
         <p className="mt-1 text-sm text-slate-500">
-          CSV-файл за 6 месяцев · колонки: дата, сумма, описание
+          CSV или PDF-выписка СберБанк Онлайн за 6 месяцев
         </p>
       </div>
 

@@ -1,0 +1,1 @@
+  const total = txs.reduce(function (a, t) { return a + t.amount; }, 0); 

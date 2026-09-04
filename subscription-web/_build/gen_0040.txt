@@ -1,0 +1,1 @@
+                d = d - timedelta(days=28) 

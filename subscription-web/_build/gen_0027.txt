@@ -1,0 +1,1 @@
+    for base_amount, day, variants in SERVICES: 

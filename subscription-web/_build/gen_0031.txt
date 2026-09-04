@@ -1,0 +1,1 @@
+            if (d - today).days > 0: 

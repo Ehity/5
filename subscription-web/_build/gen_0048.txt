@@ -1,0 +1,1 @@
+        lines.append(t['date'] + ';' + str(t['amount']) + ';' + t['description']) 

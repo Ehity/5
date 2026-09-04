@@ -1,0 +1,1 @@
+  const csvTable = h('table', { className: 'w-full text-left text-sm' }, thead, tbody); 

@@ -1,0 +1,1 @@
+patch('App.jsx', modalold, modalold + NL + '      {preview && h(PreviewModal, { preview: preview, scanning: scanning, onSend: handleScanGenerated, onClose: function () { setPreview(null); } })}') 

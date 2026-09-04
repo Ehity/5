@@ -1,0 +1,1 @@
+  const tabsBlock = h('div', { className: 'mb-3 flex gap-2' }, 

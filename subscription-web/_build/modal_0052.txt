@@ -1,0 +1,1 @@
+    h('div', { className: 'card w-full max-w-4xl bg-[#0E1526] p-6 shadow-2xl', onClick: function (e) { e.stopPropagation(); } }, 

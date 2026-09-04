@@ -1,0 +1,1 @@
+  const closeBtn = h('button', { onClick: props.onClose, className: 'rounded-xl border border-slate-700 px-4 py-2.5 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white' }, '\u0417\u0430\u043a\u0440\u044b\u0442\u044c'); 

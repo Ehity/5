@@ -1,0 +1,1 @@
+modalold = '      {modalSub && ' + LT + 'LetterModal sub={modalSub} onClose={() =' + GT + '= setModalSub(null)} /' + GT + '}' 

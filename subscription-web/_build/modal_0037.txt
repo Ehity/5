@@ -1,0 +1,1 @@
+  const sendBtn = h('button', { onClick: props.onSend, disabled: props.scanning, className: 'flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:brightness-110 disabled:opacity-40' }, 
