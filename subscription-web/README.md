@@ -1,6 +1,6 @@
 # Сбер.Сканер Подписок — веб-сервис (MVP)
 
-[![Открыть в Codespaces](https://img.shields.io/badge/Открыть%20в%20Codespaces-Запустить%20сканер-21A038?logo=github&style=for-the-badge)](https://codespaces.new/Ehity/5?quickstart=1)
+[![Открыть в Codespaces](https://img.shields.io/badge/Открыть%20в%20Codespaces-Запустить%20сканер-21A038?logo=github&style=for-the-badge)](https://codespaces.new/Ehity/5/tree/vibe?quickstart=1)
 
 Тёмный финтех-дашборд: загружаете CSV или PDF-выписку — сервис находит
 регулярные списания, считает потенциальную экономию, помечает подписки,
@@ -10,7 +10,7 @@ deep-links на отмену и генерирует готовое заявле
 ## ⚡ Проверяющим: запуск в один клик
 
 1. Нажмите зелёную кнопку **«Запустить сканер»** выше (или откройте
-   <https://codespaces.new/Ehity/5?quickstart=1>) и войдите в GitHub.
+   <https://codespaces.new/Ehity/5/tree/vibe?quickstart=1>) и войдите в GitHub.
 2. Codespaces сам поставит зависимости и соберёт UI (~2 минуты при первом запуске).
 3. Сервер стартует автоматически — вкладка со сканером (**порт 8000**) откроется
    сама. Если не открылась: во вкладке «Порты» внизу нажмите на порт **8000**.
