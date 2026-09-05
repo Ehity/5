@@ -3,6 +3,7 @@ import { Sparkles, LayoutGrid, Search } from "lucide-react";
 
 import Header from "./components/Header.jsx";
 import SavingsBanner from "./components/SavingsBanner.jsx";
+import DuplicatesBanner from "./components/DuplicatesBanner.jsx";
 import UploadZone from "./components/UploadZone.jsx";
 import SubscriptionCard from "./components/SubscriptionCard.jsx";
 import LetterModal from "./components/LetterModal.jsx";
@@ -123,6 +124,8 @@ export default function App() {
           totalMonthly={(savedYearly > 0 ? savedYearly : potentialSavingsYearly) / 12}
           cancelledCount={cancelled.length}
         />
+
+        <DuplicatesBanner subscriptions={active} />
 
         <UploadZone
           onUploaded={handleUploaded}

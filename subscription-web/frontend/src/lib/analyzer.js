@@ -367,8 +367,9 @@ export function testStatementCsv() {
     });
   };
   pushMonthly("NETFLIX.COM", [599, 599, 599, 599, 599]);
-  pushMonthly("YANDEX_PLUS", [399, 399, 399, 399, 399, 399]);
   pushMonthly("KINOPOISK HD", [399, 399, 399, 399]);           // входит в Яндекс Плюс
+  pushMonthly("START.RU", [299, 299, 299, 299, 299]);          // дубль категории «Кино и видео»
+  pushMonthly("YANDEX_PLUS", [399, 399, 399, 399, 399, 399]);
   pushMonthly("ZVUK SUBSCRIPTION", [99, 99, 299, 299], 3);     // промо → полная цена, свежая подписка
   pushMonthly("WORLD CLASS", [3490, 3490, 3490, 3490]);
   // шум — только в первых месяцах и без похожих на бренды имён
