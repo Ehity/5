@@ -1,4 +1,4 @@
-import { CalendarClock, Repeat, ExternalLink, PackageCheck } from "lucide-react";
+import { CalendarClock, Repeat, ExternalLink, PackageCheck, TrendingDown, TrendingUp } from "lucide-react";
 
 const fmt = (n) => Math.round(n).toLocaleString("ru-RU");
 
@@ -50,6 +50,30 @@ export default function SubscriptionCard({ sub, onCancel }) {
           {fmt(sub.yearly_cost)} ₽/год
         </span>
       </div>
+
+      {sub.price_change?.hasChange && (
+        <div className={`mt-3 rounded-xl border px-3 py-2.5 text-xs ${
+          sub.price_change.direction === "up"
+            ? "border-rose-500/20 bg-rose-500/10"
+            : "border-emerald-500/20 bg-emerald-500/10"
+        }`}>
+          <div className={`flex items-center gap-1.5 font-semibold ${
+            sub.price_change.direction === "up" ? "text-rose-400" : "text-emerald-400"
+          }`}>
+            {sub.price_change.direction === "up" ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+            {sub.price_change.direction === "up" ? "Подорожало" : "Подешевело"}
+            {sub.price_change.changedAt && (
+              <span className="ml-auto font-normal text-slate-500">с {fmtDate(sub.price_change.changedAt)}</span>
+            )}
+          </div>
+          <div className="mt-1 flex items-center justify-between text-slate-300">
+            <span>{fmt(sub.price_change.oldPrice)} ₽ → {fmt(sub.price_change.newPrice)} ₽</span>
+            <span className={sub.price_change.direction === "up" ? "text-rose-300" : "text-emerald-300"}>
+              {sub.price_change.percentChange > 0 ? "+" : ""}{sub.price_change.percentChange}%
+            </span>
+          </div>
+        </div>
+      )}
 
       <div className="mt-3 flex items-center justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-xs">
         <span className="flex items-center gap-1.5 text-slate-400">

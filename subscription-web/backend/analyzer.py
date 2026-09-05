@@ -381,6 +381,61 @@ def _stable_charges(items: list[dict], tol: float = 0.15) -> tuple[list[dict], f
     return stable, amounts[len(amounts) // 2]
 
 
+_PRICE_TOLERANCE = 0.05
+
+
+def detect_price_change(items: list[dict]) -> dict:
+    """Одно подтверждённое изменение цены за историю подписки.
+
+    Смена считается реальной, если на каждом ценовом уровне минимум 2
+    списания с допуском ±5% — одиночный «странный» платёж не считается.
+    Формат полей совпадает с JS-версией (frontend/src/lib/subscriptionPriceChange.js).
+    """
+    payments = sorted(
+        ({"date": t["date"], "amount": abs(float(t["amount"]))} for t in items),
+        key=lambda p: p["date"],
+    )
+    if len(payments) < 4:
+        return {"hasChange": False}
+
+    def same_price(a: float, b: float) -> bool:
+        avg = (a + b) / 2
+        return avg > 0 and abs(a - b) / avg <= _PRICE_TOLERANCE
+
+    def median(vals: list[float]) -> float:
+        s = sorted(vals)
+        mid = len(s) // 2
+        return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
+
+    def trailing_level(idx: int) -> tuple[int, float, int]:
+        amounts = [payments[idx]["amount"]]
+        i = idx - 1
+        while i >= 0 and same_price(payments[i]["amount"], median(amounts)):
+            amounts.append(payments[i]["amount"])
+            i -= 1
+        return idx - len(amounts) + 1, median(amounts), len(amounts)
+
+    new_start, new_price, new_count = trailing_level(len(payments) - 1)
+    if new_count < 2 or new_start == 0:
+        return {"hasChange": False}
+    _, old_price, old_count = trailing_level(new_start - 1)
+    if old_count < 2 or same_price(old_price, new_price):
+        return {"hasChange": False}
+    difference = round(new_price - old_price, 2)
+    percent = round(difference / old_price * 100, 2)
+    if abs(percent) < _PRICE_TOLERANCE * 100:
+        return {"hasChange": False}
+    return {
+        "hasChange": True,
+        "direction": "up" if difference > 0 else "down",
+        "oldPrice": round(old_price, 2),
+        "newPrice": round(new_price, 2),
+        "difference": difference,
+        "percentChange": percent,
+        "changedAt": payments[new_start]["date"].isoformat(),
+    }
+
+
 def detect_subscriptions(txs: list[dict]) -> list[dict]:
     groups: dict[tuple, list[dict]] = {}
     norm_keys: list[tuple] = []
@@ -450,6 +505,7 @@ def detect_subscriptions(txs: list[dict]) -> list[dict]:
             "last_charge": last.isoformat(),
             "next_charge": _add_months(last, 1 if period == "monthly" else 12).isoformat(),
             "merchants": sorted({t["description"] for t in stable}),
+            "price_change": detect_price_change(items),
         })
     subs.sort(key=lambda s: -abs(s["monthly_cost"]))
     return subs

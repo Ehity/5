@@ -231,3 +231,39 @@ def test_detect_price_change_reported_positive():
     assert len(subs) == 1
     assert subs[0]["monthly_cost"] > 0
     assert subs[0]["yearly_cost"] > 0
+
+
+def test_price_change_detected_on_tariff_raise():
+    # 3 списания по 299, затем 2 по 399 — подтверждённое повышение тарифа
+    txs = [
+        {"date": date(2026, 1, 5) + timedelta(days=30 * i),
+         "amount": -(299.0 if i < 3 else 399.0),
+         "description": "YANDEX_PLUS"}
+        for i in range(5)
+    ]
+    subs = detect_subscriptions(txs)
+    assert len(subs) == 1
+    pc = subs[0]["price_change"]
+    assert pc["hasChange"] is True
+    assert pc["direction"] == "up"
+    assert pc["oldPrice"] == 299.0
+    assert pc["newPrice"] == 399.0
+    assert pc["percentChange"] == 33.44
+
+
+def test_price_change_absent_for_flat_subscription():
+    txs = make_txs(5, 599.0, date(2026, 1, 5), 30, "NETFLIX.COM")
+    subs = detect_subscriptions(txs)
+    assert subs[0]["price_change"]["hasChange"] is False
+
+
+def test_price_change_ignores_single_odd_payment():
+    # один «странный» платёж среди стабильных — не смена тарифа
+    amounts = [599.0, 599.0, 899.0, 599.0, 599.0]
+    txs = [
+        {"date": date(2026, 1, 5) + timedelta(days=30 * i),
+         "amount": -a, "description": "NETFLIX.COM"}
+        for i, a in enumerate(amounts)
+    ]
+    subs = detect_subscriptions(txs)
+    assert subs[0]["price_change"]["hasChange"] is False

@@ -1,6 +1,8 @@
 // Порт analyzer.py + services_db.py на JavaScript — позволяет работать
 // полностью в браузере (GitHub Pages) без backend.
 
+import { detectSubscriptionPriceChange } from "./subscriptionPriceChange.js";
+
 export const BRAND_RULES = [
   ["Яндекс Плюс", "Развлечения", "🟡",
     ["YNDX", "YANDEX_PLUS", "YANDEX PLUS", "ЯНДЕКС.ПЛЮС", "ЯНДЕКС ПЛЮС", "ЯНДЕКС+", "YANDEX.MUSIC", "ПЛЮС МУЗЫК", "МУЗЫКА ПЛЮС"]],
@@ -214,10 +216,15 @@ export function detectSubscriptions(txs) {
       last_charge: last.toISOString().slice(0, 10),
       next_charge: addMonths(last, period === "monthly" ? 1 : 12).toISOString().slice(0, 10),
       merchants: [...new Set(stable.map((t) => t.description))].sort(),
+      price_change: detectSubscriptionPriceChange(items),
     });
   }
   subs.sort((a, b) => Math.abs(b.monthly_cost) - Math.abs(a.monthly_cost));
-  return subs.map((s) => ({ ...s, cancel_url: cancelUrl(s.name), included_in: INCLUDED_IN[s.name] ?? null }));
+  return subs.map((s) => ({
+    ...s,
+    cancel_url: cancelUrl(s.name),
+    included_in: INCLUDED_IN[s.name] ?? null,
+  }));
 }
 
 const COLUMN_ALIASES = {
@@ -371,7 +378,7 @@ export function testStatementCsv() {
   pushMonthly("START.RU", [299, 299, 299, 299, 299]);          // дубль категории «Кино и видео»
   pushMonthly("YANDEX_PLUS", [399, 399, 399, 399, 399, 399]);
   pushMonthly("ZVUK SUBSCRIPTION", [99, 99, 299, 299], 3);     // промо → полная цена, свежая подписка
-  pushMonthly("WORLD CLASS", [3490, 3490, 3490, 3490]);
+  pushMonthly("WORLD CLASS", [3490, 3490, 4990, 4990]);        // подняли тариф +43%
   // шум — только в первых месяцах и без похожих на бренды имён
   const noise = [
     ["PYATEROCHKA", 340.5], ["MAGNIT", 890], ["APTEKA", 610.3],

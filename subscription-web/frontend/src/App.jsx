@@ -4,6 +4,7 @@ import { Sparkles, LayoutGrid, Search } from "lucide-react";
 import Header from "./components/Header.jsx";
 import SavingsBanner from "./components/SavingsBanner.jsx";
 import DuplicatesBanner from "./components/DuplicatesBanner.jsx";
+import GrowthBanner from "./components/GrowthBanner.jsx";
 import UploadZone from "./components/UploadZone.jsx";
 import SubscriptionCard from "./components/SubscriptionCard.jsx";
 import LetterModal from "./components/LetterModal.jsx";
@@ -125,6 +126,7 @@ export default function App() {
           cancelledCount={cancelled.length}
         />
 
+        <GrowthBanner subscriptions={active} />
         <DuplicatesBanner subscriptions={active} />
 
         <UploadZone
