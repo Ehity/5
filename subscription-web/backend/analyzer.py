@@ -335,6 +335,9 @@ def _money_matches(s: str, strict: bool) -> list[tuple[str, float, int]]:
         ):
             continue
         v = value + (int(frac) / 10 ** len(frac) if frac else 0)
+        # 10+ цифр — это номера счетов, коды авторизации и телефоны, не суммы
+        if v >= 1_000_000_000:
+            continue
         out.append((sign, round(v, 2), m.start()))
     return out
 
@@ -421,7 +424,7 @@ def _transactions_from_lines(lines: list[str]) -> list[dict]:
 
     def flush() -> None:
         nonlocal pending
-        if pending and pending["amount"] is not None:
+        if pending and pending["amount"]:
             desc = re.sub(r"\s+", " ", " ".join(pending["desc"])).strip(" -–−.")
             desc = _DATE_RE.sub(" ", desc)
             desc = _TIME_IN_DESC_RE.sub(" ", desc)
@@ -457,14 +460,14 @@ def _transactions_from_lines(lines: list[str]) -> list[dict]:
             desc = _clean_desc(re.sub(r"\s+", " ", desc))
             keep = _keep(sign)
             if desc and not _TIME_ONLY_RE.fullmatch(desc):
-                if amount is not None and keep:
+                if amount and keep:
                     txs.append({"date": d, "amount": amount, "description": desc[:120]})
                     last_was_simple = True
                 else:
                     last_was_simple = False  # кредитная строка — не приклеивать описание
             else:
                 # дата + сумма, описание пойдёт следующими строками
-                start_tx(d, amount if keep else None)
+                start_tx(d, amount if (keep and amount) else None)
                 last_was_simple = False
             continue
 
@@ -500,7 +503,7 @@ def _transactions_from_lines(lines: list[str]) -> list[dict]:
         if has_money:
             # строка суммы текущей транзакции (или итог/баланс внизу)
             if pending is not None and not is_skip:
-                pending["amount"] = amount if _keep(sign) else None
+                pending["amount"] = amount if (_keep(sign) and amount) else None
             last_was_simple = False
             continue
 
@@ -535,11 +538,16 @@ def _dice(a: str, b: str) -> float:
 
 
 def _canonical_group_key(desc: str) -> tuple:
-    """Ключ группы: известный бренд либо нормализованное имя."""
+    """Ключ группы: известный бренд либо нормализованное имя.
+    Пустая нормализация (описание из одних цифр) не склеивает разные
+    транзакции — ключом становится сырая строка."""
     canon = canonical_name(desc)
     if canon:
         return ("brand", canon[0])
-    return ("norm", normalize_description(desc))
+    norm = normalize_description(desc)
+    if not norm:
+        norm = "raw:" + str(desc).strip().lower()
+    return ("norm", norm)
 
 
 def _stable_charges(items: list[dict], tol: float = 0.15) -> tuple[list[dict], float]:
@@ -627,6 +635,8 @@ def detect_price_change(items: list[dict]) -> dict:
 
 
 def detect_subscriptions(txs: list[dict]) -> list[dict]:
+    # микросписания (< 1 ₽) и нули — обрывки реквизитов, не операции
+    txs = [t for t in txs if abs(t["amount"]) >= 1]
     groups: dict[tuple, list[dict]] = {}
     norm_keys: list[tuple] = []
     for t in txs:

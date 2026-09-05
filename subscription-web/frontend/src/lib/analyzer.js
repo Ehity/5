@@ -63,14 +63,17 @@ const PDF_TIME_IN_DESC_RE = /\b\d{1,2}:\d{2}(?::\d{2})?\b/;
 const MONEY_STRICT = /(?<sign>[+−–-])\s*(?<whole>[\d\u00a0 ]+?)(?:[.,](?<frac>\d{1,2}))?\s*(?:₽|руб\.?|руб|RUB)/i;
 const MONEY_LOOSE = /(?:(?<sign>[+−–-])\s*)?(?<whole>[\d\u00a0 ]{2,})(?:[.,](?<frac>\d{1,2}))?\s*(?<curr>₽|руб\.?|руб|RUB)?(?![0-9])/i;
 
-function moneyMatches(s, strict) {
+export function moneyMatches(s, strict) {
   const base = strict ? MONEY_STRICT : MONEY_LOOSE;
   const global = new RegExp(base.source, base.flags + "g");
   const out = [];
   let m;
   while ((m = global.exec(s)) !== null) {
     // эмуляция lookbehind (?<![0-9.,]): число не может начинаться после цифры/./,/
-    if (m.index > 0 && /[0-9.,]/.test(s[m.index - 1])) continue;
+    // lookbehind-эмуляция: символ перед ПЕРВОЙ ЦИФРОЙ числа (матч может
+    // начинаться с пробела-разделителя внутри числа)
+    const numStart = m.index + (m[0].length - m[0].replace(/^[  ]+/, "").length);
+    if (numStart > 0 && /[0-9.,]/.test(s[numStart - 1])) continue;
     const sign = (m.groups.sign || "").trim();
     const curr = m.groups.curr || "";
     const wholeRaw = m.groups.whole || "";
@@ -80,11 +83,14 @@ function moneyMatches(s, strict) {
     if (Number.isNaN(value)) continue;
     // свободный режим: настоящая сумма — знак, валюта, дробь или пробел-
     // разделитель между цифрами; телефоны/даты/время отсекаются
-    if (!strict && !(sign || curr || frac || /\d[  ]\d/.test(wholeRaw))) continue;
+    if (!strict && (!(sign || curr || frac || /\d[  ]\d/.test(wholeRaw)) ||
+        whole.replace(/[  ]/g, "").length < 2)) continue;
     // число, начинающее дату (26.06.2026), суммой не является
     if (!strict && /^\d{1,2}[./]\d{1,2}[./]\d{2,4}/.test(s.slice(m.index).replace(/^\s+/, ""))) continue;
     let amount = value;
     if (frac) amount += parseInt(frac, 10) / 10 ** frac.length;
+    // 10+ цифр — номера счетов, коды авторизации и телефоны, не суммы
+    if (amount >= 1e9) continue;
     out.push({ sign, amount: Math.round(amount * 100) / 100, start: m.index });
   }
   return out;
@@ -107,7 +113,7 @@ function cleanDesc(desc) {
   return desc.replace(/\s+/g, " ").replace(/^[  −.–-]+|[  −.–-]+$/g, "").trim();
 }
 
-function parsePdfDateStr(s) {
+export function parsePdfDateStr(s) {
   const m = s.match(/^(\d{2})[./](\d{2})[./](\d{2,4})$/);
   if (!m) return null;
   const y = m[3].length === 2 ? 2000 + +m[3] : +m[3];
@@ -159,7 +165,7 @@ export function transactionsFromLines(lines) {
       const debit = "−–-".includes(chosen.sign);
       const keep = sawMinus ? debit : hasPlus ? chosen.sign !== "+" : true;
       if (desc && !PDF_TIME_ONLY_RE.test(desc)) {
-        if (chosen.amount !== null && keep) {
+        if (chosen.amount !== null && chosen.amount !== 0 && keep) {
           txs.push({ date: d, amount: chosen.amount, description: desc.slice(0, 120) });
           lastWasSimple = true;
         } else {
@@ -335,7 +341,10 @@ function dice(a, b) {
 function groupKey(description) {
   const canon = canonicalName(description);
   if (canon) return { kind: "brand", value: canon[0] };
-  return { kind: "norm", value: normalizeDescription(description) };
+  let norm = normalizeDescription(description);
+  // пустая нормализация (описание из одних цифр) не склеивает разные транзакции
+  if (!norm) norm = "raw:" + String(description).trim().toLowerCase();
+  return { kind: "norm", value: norm };
 }
 
 const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -367,6 +376,8 @@ function stableCharges(items) {
 }
 
 export function detectSubscriptions(txs) {
+  // микросписания (< 1 ₽) и нули — обрывки реквизитов, не операции
+  txs = txs.filter((t) => Math.abs(t.amount) >= 1);
   const groups = new Map();
   const normKeys = [];
   for (const t of txs) {
