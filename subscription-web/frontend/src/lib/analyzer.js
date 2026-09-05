@@ -88,6 +88,9 @@ function parseMoney(s, strict) {
 const AUTH_CODE_RE = /^\d{4,8}\b\s*/;
 const OP_BY_CARD_RE = /\s*Операция по карте(?:\s*\*{2,}[\dx]+)?\s*$/i;
 
+// Движение денег между своими счетами и наличные — не подписки
+const INTERNAL_RE = /перевод|банкомат|вклад|наличн|пополнен|списание|сбербанк|стипендия|kartavklad|vklad|sberbank onl|qr[- ]?код/i;
+
 function cleanDesc(desc) {
   desc = desc.replace(OP_BY_CARD_RE, "");
   return desc.replace(/\s+/g, " ").replace(/^[  −.–-]+|[  −.–-]+$/g, "").trim();
@@ -382,6 +385,8 @@ export function detectSubscriptions(txs) {
 
   const subs = [];
   for (const { key, items } of groups.values()) {
+    // внутренние переводы и вклады — не подписки, даже при регулярности
+    if (INTERNAL_RE.test(key.value)) continue;
     const minEvents = key.kind === "brand" ? 2 : 3;
     if (items.length < minEvents) continue;
     const { stable, current } = stableCharges(items);
@@ -554,6 +559,14 @@ export function parseCsvText(text) {
   if (!lines.length) return [];
   const headerRow = findHeaderRow(lines);
   const headers = csvSplit(lines[headerRow.idx], headerRow.delim);
+
+  // одноколоночный CSV — текстовый дамп выписки (экспорт «как есть»):
+  // отдаём все строки построчному PDF-парсеру
+  if (headers.length < 2) {
+    return transactionsFromLines(
+      lines.map((l) => l.replace(/^"|"$/g, "").trim()).filter(Boolean)
+    );
+  }
   const delim = headerRow.delim;
   const { pick } = pickColumns(headers);
   const rows = lines.slice(headerRow.idx + 1).map((l) => csvSplit(l, delim));
@@ -652,25 +665,48 @@ export function testStatementCsv() {
   const today = new Date();
   const base = new Date(today.getFullYear(), today.getMonth() - 6, 5);
   const rows = [["Date", "Description", "Amount"].join(",")];
+  // джиттер ±2% — не ломает детекцию (порог цены 5%), но демо всегда новое
+  const jitter = (v) => Math.round(v * (1 + (Math.random() * 0.04 - 0.02)) * 100) / 100;
+
   const pushMonthly = (name, amounts, startOffset = 0) => {
     amounts.forEach((amt, i) => {
+      // редкий пропуск месяца, но не больше одного и не для промо/смены цены
+      if (amounts.length >= 4 && Math.random() < 0.1 && i > 0 && i < amounts.length - 1) return;
       const d = addMonths(base, i + startOffset);
-      rows.push(`${dateKey(d)},${name},-${amt.toFixed(2)}`);
+      const shifted = new Date(d.getFullYear(), d.getMonth(), Math.max(1, Math.min(28, d.getDate() + Math.round(Math.random() * 4 - 2))));
+      rows.push(`${dateKey(shifted)},${name},-${jitter(amt).toFixed(2)}`);
     });
   };
+
   pushMonthly("NETFLIX.COM", [599, 599, 599, 599, 599]);
   pushMonthly("KINOPOISK HD", [399, 399, 399, 399]);           // входит в Яндекс Плюс
   pushMonthly("START.RU", [299, 299, 299, 299, 299]);          // дубль категории «Кино и видео»
   pushMonthly("YANDEX_PLUS", [399, 399, 399, 399, 399, 399]);
   pushMonthly("ZVUK SUBSCRIPTION", [99, 99, 299, 299], 3);     // промо → полная цена, свежая подписка
   pushMonthly("WORLD CLASS", [3490, 3490, 4990, 4990]);        // подняли тариф +43%
-  // шум — только в первых месяцах и без похожих на бренды имён
+
+  // случайные дополнительные подписки — демо каждый раз разное
+  const extras = [
+    ["OKKO.SUBSCRIPTION", 449], ["KION.RU", 249], ["VK.COM MUSIC", 299], ["MEGOGO.RU", 199],
+  ];
+  const extraCount = Math.floor(Math.random() * 3); // 0..2
+  const pool = [...extras];
+  for (let n = 0; n < extraCount && pool.length; n++) {
+    const [name, amt] = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+    const count = 4 + Math.floor(Math.random() * 2);
+    pushMonthly(name, Array(count).fill(amt), Math.floor(Math.random() * 2));
+  }
+
+  // шум — случайные покупки, не похожие на бренды
   const noise = [
     ["PYATEROCHKA", 340.5], ["MAGNIT", 890], ["APTEKA", 610.3],
+    ["STARBUCKS", 430.7], ["KFC", 398], ["CINEMA PARK", 720],
   ];
-  noise.forEach(([name, amt], i) => {
-    const d = addMonths(base, i);
-    rows.push(`${dateKey(d)},${name},-${amt.toFixed(2)}`);
-  });
+  const noiseCount = 3 + Math.floor(Math.random() * 3);
+  for (let n = 0; n < noiseCount; n++) {
+    const [name, amt] = noise[Math.floor(Math.random() * noise.length)];
+    const d = addMonths(base, Math.floor(Math.random() * 5));
+    rows.push(`${dateKey(d)},${name},-${jitter(amt).toFixed(2)}`);
+  }
   return rows.join("\n");
 }

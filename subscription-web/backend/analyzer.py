@@ -154,6 +154,14 @@ def _pick_columns(rows: list[dict]) -> dict:
 
 _DATE_IN_CELL_RE = re.compile(r"\d{1,4}[./-]\d{1,2}[./-]\d{2,4}")
 
+# Движение денег между своими счетами и наличные — не подписки, даже если
+# повторяются регулярно (карта→вклад, переводы СБП, снятие наличных и т.п.)
+_INTERNAL_RE = re.compile(
+    r"перевод|банкомат|вклад|наличн|пополнен|списание|сбербанк|стипендия"
+    r"|kartavklad|vklad|sberbank onl|qr[- ]?код",
+    re.IGNORECASE,
+)
+
 
 def _guess_columns(rows: list[dict], headers: list, pick: dict) -> None:
     """Эвристика для нестандартных заголовков: колонка с датами — «дата»,
@@ -645,6 +653,9 @@ def detect_subscriptions(txs: list[dict]) -> list[dict]:
 
     subs = []
     for key, items in groups.items():
+        # внутренние переводы и вклады — не подписки, даже при регулярности
+        if _INTERNAL_RE.search(str(key[1])):
+            continue
         min_events = 2 if key[0] == "brand" else 3  # брендовые сервисы достаточны уже с 2 списаниями
         if len(items) < min_events:  # минимум списаний, чтобы отличать подписку от случайных совпадений
             continue

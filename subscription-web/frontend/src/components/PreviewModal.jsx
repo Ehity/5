@@ -78,17 +78,25 @@ export default function PreviewModal({ csv, pdfUrl, onClose, onSubmit }) {
           >
             <Table2 size={15} /> CSV-таблица
           </button>
-          <button
-            onClick={() => setActiveTab("pdf")}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm transition ${
-              activeTab === "pdf"
-                ? "border-b-2 border-emerald-400 text-emerald-400"
-                : "text-slate-500 hover:text-white"
-            }`}
-          >
-            <FileImage size={15} /> PDF-просмотр
-          </button>
+          {pdfUrl && (
+            <button
+              onClick={() => setActiveTab("pdf")}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm transition ${
+                activeTab === "pdf"
+                  ? "border-b-2 border-emerald-400 text-emerald-400"
+                  : "text-slate-500 hover:text-white"
+              }`}
+            >
+              <FileImage size={15} /> PDF-просмотр
+            </button>
+          )}
         </div>
+        {!pdfUrl && (
+          <p className="px-6 pt-3 text-xs text-slate-500">
+            PDF-версия демо-выписки доступна в серверной версии (start_web.bat) —
+            в браузерном режиме показана CSV-таблица.
+          </p>
+        )}
 
         <div className="max-h-[55vh] overflow-y-auto px-6 py-4">
           {activeTab === "csv" && (
