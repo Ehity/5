@@ -8,8 +8,8 @@ let _pdfjs = null;
 async function getPdfjs() {
   if (!_pdfjs) {
     const [lib, { default: workerUrl }] = await Promise.all([
-      import("pdfjs-dist"),
-      import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
+      import("pdfjs-dist/legacy/build/pdf.mjs"),
+      import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url"),
     ]);
     lib.GlobalWorkerOptions.workerSrc = workerUrl;
     _pdfjs = lib;
@@ -53,13 +53,16 @@ const PDF_DATE_RE = /\b(\d{2}[./]\d{2}[./]\d{2,4})\b/;
 const PDF_TIME_ONLY_RE = /^[\d\s:.]+$/;
 const PDF_TIME_IN_DESC_RE = /\b\d{1,2}:\d{2}(?::\d{2})?\b/;
 const MONEY_STRICT = /(?<sign>[+−–-])\s*(?<whole>[\d\u00a0 ]+?)(?:[.,](?<frac>\d{1,2}))?\s*(?:₽|руб\.?|руб|RUB)/i;
-const MONEY_LOOSE = /(?<![0-9.,])(?:(?<sign>[+−–-])\s*)?(?<whole>[\d\u00a0 ]{2,})(?:[.,](?<frac>\d{1,2}))?\s*(?<curr>₽|руб\.?|руб|RUB)?(?![0-9])/i;
+const MONEY_LOOSE = /(?:(?<sign>[+−–-])\s*)?(?<whole>[\d\u00a0 ]{2,})(?:[.,](?<frac>\d{1,2}))?\s*(?<curr>₽|руб\.?|руб|RUB)?(?![0-9])/i;
 
 function moneyMatches(s, strict) {
   const base = strict ? MONEY_STRICT : MONEY_LOOSE;
   const global = new RegExp(base.source, base.flags + "g");
   const out = [];
-  for (const m of s.matchAll(global)) {
+  let m;
+  while ((m = global.exec(s)) !== null) {
+    // эмуляция lookbehind (?<![0-9.,]): число не может начинаться после цифры/./,/
+    if (m.index > 0 && /[0-9.,]/.test(s[m.index - 1])) continue;
     const sign = (m.groups.sign || "").trim();
     const curr = m.groups.curr || "";
     const wholeRaw = m.groups.whole || "";
@@ -486,15 +489,15 @@ function guessMissingColumns(rows, headers, pick) {
     const textN = vals.reduce((a, v) => a + v.length, 0) / vals.length;
     stats.push({ i, dateN, numN, textN });
   }
-  if (!Object.hasOwn(pick, "date")) {
+  if (pick.date === undefined) {
     const best = stats.filter((s) => s.dateN > 0).sort((a, b) => b.dateN - a.dateN)[0];
     if (best) { pick.date = best.i; }
   }
-  if (!Object.hasOwn(pick, "amount")) {
+  if (pick.amount === undefined) {
     const best = stats.filter((s) => s.i !== pick.date && s.numN > 0).sort((a, b) => b.numN - a.numN)[0];
     if (best) { pick.amount = best.i; }
   }
-  if (!Object.hasOwn(pick, "description")) {
+  if (pick.description === undefined) {
     const best = stats.filter((s) => s.i !== pick.date && s.i !== pick.amount)
       .sort((a, b) => b.textN - a.textN)[0];
     if (best) { pick.description = best.i; }
