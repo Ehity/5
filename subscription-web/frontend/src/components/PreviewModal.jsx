@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { X, Download, FileText, FileImage, Loader2, Table2, FileUp } from "lucide-react";
 
+// iOS Safari не умеет показывать PDF внутри <object>/<embed> — только скачать
+const isAppleDevice =
+  /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
 export default function PreviewModal({ csv, pdfUrl, onClose, onSubmit }) {
   const [activeTab, setActiveTab] = useState("csv");
   const [loading, setLoading] = useState(false);
@@ -121,26 +126,43 @@ export default function PreviewModal({ csv, pdfUrl, onClose, onSubmit }) {
           )}
 
           {activeTab === "pdf" && pdfUrl && (
-            <div className="flex items-center justify-center">
-              <object
-                data={pdfUrl}
-                type="application/pdf"
-                className="h-[55vh] w-full"
-                title="PDF Preview"
-              >
-                <p className="text-center text-slate-500">
-                  Ваш браузер не поддерживает просмотр PDF.{" "}
-                  <a
-                    href={pdfUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-emerald-400"
-                  >
-                    Скачать PDF
-                  </a>
+            isAppleDevice ? (
+              <div className="flex flex-col items-center gap-3 py-8">
+                <FileImage size={36} className="text-emerald-400" />
+                <p className="max-w-xs text-center text-sm text-slate-400">
+                  iOS не показывает PDF внутри страницы. Скачайте файл — он откроется
+                  во встроенном просмотрщике.
                 </p>
-              </object>
-            </div>
+                <a
+                  href={pdfUrl}
+                  download="test_statement.pdf"
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20"
+                >
+                  <Download size={16} /> Скачать PDF
+                </a>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center">
+                <object
+                  data={pdfUrl}
+                  type="application/pdf"
+                  className="h-[55vh] w-full"
+                  title="PDF Preview"
+                >
+                  <p className="text-center text-slate-500">
+                    Ваш браузер не поддерживает просмотр PDF.{" "}
+                    <a
+                      href={pdfUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-emerald-400"
+                    >
+                      Скачать PDF
+                    </a>
+                  </p>
+                </object>
+              </div>
+            )
           )}
         </div>
 

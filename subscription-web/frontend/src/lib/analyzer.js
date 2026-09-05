@@ -19,8 +19,16 @@ async function getPdfjs() {
 
 /** Извлекает строки текста из PDF-выписки (координатная сборка строк). */
 export async function extractPdfLines(buf) {
-  const pdfjsLib = await getPdfjs();
-  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  let pdf;
+  try {
+    const pdfjsLib = await getPdfjs();
+    pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  } catch (e) {
+    console.error(e);
+    throw new Error(
+      "Не удалось обработать PDF в этом браузере. Попробуйте обновить iOS/браузер или загрузите CSV-выписку."
+    );
+  }
   const lines = [];
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
