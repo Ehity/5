@@ -195,6 +195,32 @@ def _guess_columns(rows: list[dict], headers: list, pick: dict) -> None:
             pick["description"] = best[0]
 
 
+def _find_header_line(lines: list[str]) -> int:
+    """Выписки Сбера начинаются со служебных строк («900 www.sberbank.ru…»),
+    а не с заголовков. Ищем первую строку, где угадываются ≥2 вида колонок."""
+    best_idx, best_kinds = 0, 0
+    for i, line in enumerate(lines[:15]):
+        if not line.strip():
+            continue
+        for delim in (";", "\t", ","):
+            try:
+                cells = next(csv.reader([line], delimiter=delim))
+            except (csv.Error, StopIteration):
+                continue
+            if len(cells) < 2:
+                continue
+            norm = [_norm_header(c) for c in cells]
+            kinds = 0
+            for aliases in COLUMN_ALIASES.values():
+                if any(a in n for n in norm if n for a in aliases):
+                    kinds += 1
+            if kinds > best_kinds:
+                best_idx, best_kinds = i, kinds
+        if best_kinds >= 2 and best_idx == i:
+            break
+    return best_idx
+
+
 def parse_csv(content: bytes) -> list[dict]:
     """Читает CSV-выписку -> [{'date': date, 'amount': float, 'description': str}]."""
     text = None
@@ -207,12 +233,16 @@ def parse_csv(content: bytes) -> list[dict]:
     if text is None:
         raise ValueError("Не удалось определить кодировку файла")
 
-    sample = text[:4096]
+    lines = text.splitlines()
+    header_idx = _find_header_line(lines)
+    body = "\n".join(lines[header_idx:])
+
+    sample = body[:4096]
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=";,\t")
     except csv.Error:
         dialect = csv.excel
-    rows = list(csv.DictReader(io.StringIO(text), dialect=dialect))
+    rows = list(csv.DictReader(io.StringIO(body), dialect=dialect))
     if not rows:
         return []
 

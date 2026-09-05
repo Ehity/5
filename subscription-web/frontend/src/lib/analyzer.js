@@ -485,17 +485,36 @@ function csvSplit(line, delim) {
   return out;
 }
 
+// Ищем строку заголовков: выписки Сбера начинаются со служебных строк
+// («900 www.sberbank.ru Заказано...», «Выписка по счёту...»), а не с колонок.
+function findHeaderRow(lines) {
+  let best = { idx: 0, delim: ",", kinds: 0 };
+  const limit = Math.min(lines.length, 15);
+  for (let i = 0; i < limit; i++) {
+    for (const delim of [";", "\t", ","]) {
+      const cells = csvSplit(lines[i], delim);
+      if (cells.length < 2) continue;
+      const norm = cells.map(normalizeHeader);
+      let kinds = 0;
+      for (const aliases of Object.values(COLUMN_ALIASES)) {
+        if (aliases.some((a) => norm.some((n) => n && n.length >= 3 && (a === n || a.includes(n) || n.includes(a))))) kinds++;
+      }
+      if (kinds > best.kinds) best = { idx: i, delim, kinds };
+    }
+    if (best.kinds >= 2 && best.idx === i) break; // первая строка, похожая на заголовок
+  }
+  return best;
+}
+
 // CSV: строки -> [{date, amount, description}]
 export function parseCsvText(text) {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
   if (!lines.length) return [];
-  const header = lines[0];
-  const delim = [";", ",", "\t"]
-    .map((d) => [d, header.split(d).length])
-    .sort((a, b) => b[1] - a[1])[0][0];
-  const headers = header.split(delim);
+  const headerRow = findHeaderRow(lines);
+  const headers = csvSplit(lines[headerRow.idx], headerRow.delim);
+  const delim = headerRow.delim;
   const { pick } = pickColumns(headers);
-  const rows = lines.slice(1).map((l) => csvSplit(l, delim));
+  const rows = lines.slice(headerRow.idx + 1).map((l) => csvSplit(l, delim));
   if (Object.values(pick).some((i) => i === undefined) || Object.keys(pick).length < 3) {
     guessMissingColumns(rows, headers, pick);
   }
