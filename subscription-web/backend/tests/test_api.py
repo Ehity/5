@@ -99,9 +99,41 @@ def test_upload_rejects_empty_file():
 
 
 def test_generate_letter():
+    # Netflix — зарубежный сервис: англоязычное письмо без законов РФ
     r = client.post("/api/generate-letter", json={"name": "Netflix", "amount": 599.0})
     assert r.status_code == 200
     letter = r.json()["letter"]
     assert "Netflix" in letter
-    assert "599.00" in letter          # сумма прописана в письме
-    assert "782" in letter             # ссылка на ст. 782 ГК РФ
+    assert "599.00" in letter
+    assert "cancel my subscription" in letter
+    assert "782" not in letter
+
+
+def test_generate_letter_foreign_service_is_english():
+    r = client.post("/api/generate-letter", json={"name": "Netflix", "amount": 599.0})
+    assert r.status_code == 200
+    letter = r.json()["letter"]
+    assert "cancel my subscription" in letter
+    assert "782" not in letter          # зарубежному сервису законы РФ не пишем
+    assert "Защите прав потребителей" not in letter
+
+
+def test_generate_letter_ru_service_keeps_laws():
+    r = client.post("/api/generate-letter", json={"name": "Яндекс Плюс", "amount": 399.0})
+    assert r.status_code == 200
+    letter = r.json()["letter"]
+    assert "782" in letter
+    assert "руб./мес" in letter
+
+
+def test_generate_letter_world_class_is_ru():
+    # латинское имя, но российский сервис
+    r = client.post("/api/generate-letter", json={"name": "WORLD CLASS"})
+    assert r.status_code == 200
+    assert "782" in r.json()["letter"]
+
+
+def test_generate_letter_unknown_latin_defaults_to_english():
+    r = client.post("/api/generate-letter", json={"name": "Steam"})
+    assert r.status_code == 200
+    assert "cancel my subscription" in r.json()["letter"]

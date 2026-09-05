@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import Path
 
@@ -168,6 +169,27 @@ class LetterRequest(BaseModel):
     period: str = "ежемесячно"
 
 
+
+# Российские сервисы — им корректно ссылаться на законы РФ. Зарубежным
+# (Netflix, Spotify и т.п.), ушедшим из РФ, пишем англоязычное письмо без
+# отсылок к российским законам — те на них не распространяются.
+RU_SERVICES = {
+    "яндекс плюс", "иви", "okko", "кион", "kion", "кинопоиск", "premier",
+    "амедиатека", "more.tv", "start", "wink", "мегого", "megogo",
+    "сберпрайм", "world class", "звук", "vk музыка", "яндекс go",
+}
+_FOREIGN_RE = re.compile(r"[A-Za-z]")
+
+
+def is_ru_service(name: str) -> bool:
+    """Российский ли это сервис: известный из словаря или кириллическое имя."""
+    low = name.strip().lower()
+    if low in RU_SERVICES:
+        return True
+    # неизвестное имя: кириллица — скорее всего российский сервис
+    return not _FOREIGN_RE.search(name) and any("а" <= ch.lower() <= "я" or ch.lower() == "ё" for ch in low)
+
+
 LETTER_TEMPLATE = """Кому: Служба поддержки «{name}»
 Тема: Отказ от автопродления подписки и прекращение списаний
 
@@ -197,18 +219,52 @@ LETTER_TEMPLATE = """Кому: Служба поддержки «{name}»
 Клиент сервиса «{name}»"""
 
 
+LETTER_TEMPLATE_EN = """To: {name} Support Team
+Subject: Request to cancel subscription and stop recurring charges
+
+Hello,
+
+I am a customer of {name}. I kindly ask you to cancel my subscription and
+disable auto-renewal{amount_line_en}, so that no further charges are made to
+my card.
+
+Please:
+1. Cancel the subscription and auto-renewal for my account.
+2. Stop all further recurring charges.
+3. Refund the payment for the unused period, if one has already been charged,
+   in accordance with the terms of service.
+4. Confirm the cancellation by email.
+
+Date: {today}
+
+Best regards,
+A customer of {name}"""
+
+
 @app.post("/api/generate-letter")
 def generate_letter(req: LetterRequest) -> dict:
-    """Готовит юридически корректный текст заявления на отмену подписки."""
-    amount_line = ""
-    if req.amount:
-        amount_line = f" в размере {req.amount:,.2f} руб./мес".replace(",", " ")
-    letter = LETTER_TEMPLATE.format(
-        name=req.name,
-        amount_line=amount_line,
-        last_line=date.today().isoformat(),
-        today=date.today().strftime("%d.%m.%Y"),
-    )
+    """Готовит заявление на отмену подписки: российским сервисам — со ссылками
+    на законы РФ, зарубежным — англоязычное письмо по их правилам."""
+    today = date.today()
+    if is_ru_service(req.name):
+        amount_line = ""
+        if req.amount:
+            amount_line = f" в размере {req.amount:,.2f} руб./мес".replace(",", " ")
+        letter = LETTER_TEMPLATE.format(
+            name=req.name,
+            amount_line=amount_line,
+            last_line=today.isoformat(),
+            today=today.strftime("%d.%m.%Y"),
+        )
+    else:
+        amount_line_en = ""
+        if req.amount:
+            amount_line_en = f" (currently {req.amount:,.2f} RUB per month)".replace(",", " ")
+        letter = LETTER_TEMPLATE_EN.format(
+            name=req.name,
+            amount_line_en=amount_line_en,
+            today=today.strftime("%d.%m.%Y"),
+        )
     return {"letter": letter, "name": req.name}
 
 

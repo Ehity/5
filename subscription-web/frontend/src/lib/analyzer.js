@@ -658,12 +658,29 @@ export function monthlyExpenseSeriesAll(txs, months = 6) {
   return series;
 }
 
+const RU_SERVICES = new Set([
+  "яндекс плюс", "иви", "okko", "кион", "kion", "кинопоиск", "premier",
+  "амедиатека", "more.tv", "start", "wink", "мегого", "megogo",
+  "сберпрайм", "world class", "звук", "vk музыка", "яндекс go",
+]);
+
+function isRuService(name) {
+  const low = String(name).trim().toLowerCase();
+  if (RU_SERVICES.has(low)) return true;
+  // неизвестное имя: кириллица — скорее всего российский сервис
+  return !/[A-Za-z]/.test(low) && /[а-яё]/.test(low);
+}
+
 export function buildLetter({ name, amount }) {
-  const amountLine = amount ? ` в размере ${amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, " ")} руб./мес` : "";
   const today = new Date();
   const dd = String(today.getDate()).padStart(2, "0");
   const mm = String(today.getMonth() + 1).padStart(2, "0");
-  return `Кому: Служба поддержки «${name}»
+  const dateRu = `${dd}.${mm}.${today.getFullYear()}`;
+  if (isRuService(name)) {
+    const amountLine = amount
+      ? ` в размере ${amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, " ")} руб./мес`
+      : "";
+    return `Кому: Служба поддержки «${name}»
 Тема: Отказ от автопродления подписки и прекращение списаний
 
 Здравствуйте!
@@ -686,10 +703,35 @@ export function buildLetter({ name, amount }) {
    (ст. 31 Закона РФ «О защите прав потребителей»).
 
 Дата последнего списания: ${today.toISOString().slice(0, 10)}
-Дата обращения: ${dd}.${mm}.${today.getFullYear()}
+Дата обращения: ${dateRu}
 
 С уважением,
 Клиент сервиса «${name}»`;
+  }
+  // Зарубежный сервис: англоязычное письмо без ссылок на законы РФ
+  const amountLine = amount
+    ? ` (currently ${amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, " ")} RUB per month)`
+    : "";
+  return `To: ${name} Support Team
+Subject: Request to cancel subscription and stop recurring charges
+
+Hello,
+
+I am a customer of ${name}. I kindly ask you to cancel my subscription and
+disable auto-renewal${amountLine}, so that no further charges are made to
+my card.
+
+Please:
+1. Cancel the subscription and auto-renewal for my account.
+2. Stop all further recurring charges.
+3. Refund the payment for the unused period, if one has already been charged,
+   in accordance with the terms of service.
+4. Confirm the cancellation by email.
+
+Date: ${dateRu}
+
+Best regards,
+A customer of ${name}`;
 }
 
 // Детерминированная тестовая выписка для браузерного режима (без backend).
