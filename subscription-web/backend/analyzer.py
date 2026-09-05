@@ -248,6 +248,11 @@ def parse_csv(content: bytes) -> list[dict]:
 
     pick = _pick_columns(rows)
     if not {"date", "amount", "description"}.issubset(pick):
+        # CSV с одной колонкой — это текстовый дамп выписки (экспорт «как есть»),
+        # прогоняем его через построчный PDF-парсер
+        if len(rows[0]) == 1:
+            text_lines = [next(iter(r.values())).strip().strip('"') for r in rows]
+            return _transactions_from_lines(text_lines)
         raise ValueError(
             "Не удалось определить в CSV колонки «Дата / Сумма / Описание». "
             f"Заголовки: {list(rows[0].keys())}"
@@ -273,7 +278,8 @@ def parse_csv(content: bytes) -> list[dict]:
 # Строки-заглушки (шапки, итоги, нумерация страниц) — не описания транзакций
 _PDF_SKIP_RE = re.compile(
     r"продолжение|страниц|сформирова|справк|выписк|счёт|счет|доступн|"
-    r"баланс|всего|итого|период|владелец|операци|статус|реквизит|валюта|назначение",
+    r"баланс|всего|итого|период|владелец|операци|статус|реквизит|валюта|назначение|"
+    r"остаток|номер сч|дата откр|дата закрыт|действителен|расшифровк",
     re.IGNORECASE,
 )
 _DATE_RE = re.compile(r"\b(\d{2}[./]\d{2}[./]\d{2,4})\b")
@@ -295,26 +301,58 @@ _MONEY_LOOSE = re.compile(
 )
 
 
-def _parse_money(s: str, strict: bool) -> tuple[str, float | None]:
-    """Возвращает (знак, сумма). Пример: '-599,00 ₽' → ('-', 599.0)."""
+def _money_matches(s: str, strict: bool) -> list[tuple[str, float, int]]:
+    """Все валидные суммы в строке: [(знак, значение, позиция)]."""
+    out: list[tuple[str, float, int]] = []
     pattern = _MONEY_STRICT if strict else _MONEY_LOOSE
-    m = pattern.search(s)
-    if not m:
+    for m in pattern.finditer(s):
+        sign = (m.group("sign") or "").strip()
+        curr = m.group("curr") if "curr" in m.groupdict() and m.group("curr") else ""
+        whole_raw = m.group("whole") or ""
+        whole = whole_raw.replace(" ", "").replace("\u00a0", "")
+        frac = m.group("frac")
+        try:
+            value = float(whole)
+        except ValueError:
+            continue
+        # свободный режим: отсеиваем телефоны, даты и время; настоящая сумма —
+        # знак, валюта, десятичная дробь или пробел-разделитель между цифрами.
+        # Отдельно: число, начинающее дату (26.06.2026), суммой не является
+        if not strict and not (
+            sign or curr or frac or re.search(r"\d[ \u00a0]\d", whole_raw)
+        ):
+            continue
+        if not strict and re.match(
+            r"\d{1,2}[./]\d{1,2}[./]\d{2,4}", s[m.start():].lstrip()
+        ):
+            continue
+        v = value + (int(frac) / 10 ** len(frac) if frac else 0)
+        out.append((sign, round(v, 2), m.start()))
+    return out
+
+
+def _parse_money(s: str, strict: bool) -> tuple[str, float | None]:
+    """Возвращает (знак, сумма). Пример: '-599,00 ₽' → ('-', 599.0).
+
+    Перебирает все совпадения: левое может оказаться фрагментом даты
+    ('26.06' в '26.06.2026 ... 7 000,00'), отбраковывается защитой, и нужно
+    взять следующее настоящее — сумму в конце строки.
+    """
+    matches = _money_matches(s, strict)
+    if not matches:
         return "", None
-    sign = (m.group("sign") or "").strip()
-    curr = m.group("curr") if "curr" in m.groupdict() and m.group("curr") else ""
-    whole = (m.group("whole") or "").replace(" ", "").replace("\u00a0", "")
-    frac = m.group("frac")
-    try:
-        value = float(whole)
-    except ValueError:
-        return "", None
-    # свободный режим: отсеиваем телефоны и даты («866-579-7172», «05.02.2026»)
-    if not strict and not (sign or curr or (" " in whole or "\u00a0" in whole)):
-        return "", None
-    if frac:
-        value += int(frac) / (10 ** len(frac))
-    return sign, round(value, 2)
+    sign, value, _ = matches[0]
+    return sign, value
+
+
+_AUTH_CODE_RE = re.compile(r"^\d{4,8}\s*")
+_OP_BY_CARD_RE = re.compile(r"\s*Операция по карте(?:\s*\*{2,}[\dx]+)?\s*$", re.IGNORECASE)
+
+
+def _clean_desc(desc: str) -> str:
+    """Убирает служебный хвост «Операция по карте ****0490» из описания."""
+    desc = _OP_BY_CARD_RE.sub("", desc)
+    return re.sub(r"\s+", " ", desc).strip(" -–−.")
 
 
 def parse_pdf(content: bytes) -> list[dict]:
@@ -334,9 +372,11 @@ def parse_pdf(content: bytes) -> list[dict]:
 def _transactions_from_lines(lines: list[str]) -> list[dict]:
     """Собирает транзакции из строк выписки.
 
-    Поддерживает два формата:
+    Поддерживает форматы:
       1) многострочный (Сбер):  '05.08.26 17:04' / '−599,00 ₽' / 'NETFLIX.COM ...'
       2) однострочный:          '05.08.2026  NETFLIX.COM  -599,00 ₽'
+      3) дебетовая карта Сбера: списания без знака, пополнения с '+', описание
+         операции идёт следующей строкой (дата + код авторизации + текст)
     """
     has_currency = any(("₽" in l or "руб" in l or "RUB" in l) for l in lines)
     # строгий режим — только когда в выписке реально есть знак минус в сумме.
@@ -344,17 +384,32 @@ def _transactions_from_lines(lines: list[str]) -> list[dict]:
     # беззнаковые суммы (напр. "599.0 RUB") парсятся свободным режимом,
     # чтобы тестовые PDF-выписки не теряли транзакции вообще.
     strict = has_currency and any(
-        _parse_money(l, True)[0] in "−–-" for l in lines
+        (s := _parse_money(l, True)[0]) and s in "−–-" for l in lines
     )
 
-    # если в выписке есть хоть один минус — берём только списания,
-    # иначе (все суммы без знака) — берём всё (разделить нельзя)
-    saw_signed = any(
-        _parse_money(l, strict)[0] in "−–-" for l in lines
-    )
+    signs = [_parse_money(l, strict)[0] for l in lines]
+    saw_minus = any(s and s in "−–-" for s in signs)
+    has_plus = any(s == "+" for s in signs)
+
+    # Правило отбора: минус — точно списание; если в выписке плюсы есть,
+    # а минусов нет (дебетовая карта Сбера), беззнаковые суммы — списания,
+    # а с плюсом — пополнения, их не учитываем.
+    if saw_minus:
+        def _keep(s: str) -> bool:
+            return s in "−–-"
+    elif has_plus:
+        def _keep(s: str) -> bool:
+            return s != "+"
+    else:
+        def _keep(s: str) -> bool:
+            return True
+
+    _AUTH_CODE_RE = re.compile(r"^\d{4,8}\b\s*")
+    _OP_BY_CARD_RE = re.compile(r"Операция по карте [*x\d]+\s*$", re.IGNORECASE)
 
     txs: list[dict] = []
     pending: dict | None = None  # {'date': date, 'amount': float|None, 'desc': [str]}
+    last_was_simple = False  # предыдущая строка добавила транзакцию сама (однострочный формат)
 
     def flush() -> None:
         nonlocal pending
@@ -362,7 +417,7 @@ def _transactions_from_lines(lines: list[str]) -> list[dict]:
             desc = re.sub(r"\s+", " ", " ".join(pending["desc"])).strip(" -–−.")
             desc = _DATE_RE.sub(" ", desc)
             desc = _TIME_IN_DESC_RE.sub(" ", desc)
-            desc = re.sub(r"\s+", " ", desc).strip(" -–−.")
+            desc = _clean_desc(re.sub(r"\s+", " ", desc))
             if desc:
                 txs.append({"date": pending["date"], "amount": pending["amount"],
                             "description": desc[:120]})
@@ -376,49 +431,75 @@ def _transactions_from_lines(lines: list[str]) -> list[dict]:
 
     for line in lines:
         m_date = _DATE_RE.search(line)
-        sign, amount = _parse_money(line, strict)
+        matches = _money_matches(line, strict)
+        sign, amount = (matches[0][0], matches[0][1]) if matches else ("", None)
         is_skip = bool(_PDF_SKIP_RE.search(line))
-        has_money = amount is not None
+        has_money = bool(matches)
 
         if m_date and has_money:
-            # однострочный формат: дата + (описание) + сумма
+            # однострочный формат: дата + (описание) + [сумма + остаток]
             flush()
             d = _parse_date(m_date.group(1))
             if not d:
                 continue
-            # описание между датой и суммой
-            m_money = (_MONEY_STRICT if strict else _MONEY_LOOSE).search(line)
-            desc = (line[:m_date.start()] + " " + line[m_date.end():m_money.start()])
+            # в конце строки два числа: предпоследнее — сумма, последнее — остаток
+            sign, amount, m_start = matches[-2] if len(matches) >= 2 else matches[0]
+            desc = (line[:m_date.start()] + " " + line[m_date.end():m_start])
             desc = _TIME_IN_DESC_RE.sub(" ", desc)
-            desc = re.sub(r"\s+", " ", desc).strip(" -–−.")
-            debit = sign in "−–-"
+            desc = _clean_desc(re.sub(r"\s+", " ", desc))
+            keep = _keep(sign)
             if desc and not _TIME_ONLY_RE.fullmatch(desc):
-                if amount is not None and (debit or not saw_signed):
+                if amount is not None and keep:
                     txs.append({"date": d, "amount": amount, "description": desc[:120]})
+                    last_was_simple = True
+                else:
+                    last_was_simple = False  # кредитная строка — не приклеивать описание
             else:
                 # дата + сумма, описание пойдёт следующими строками
-                start_tx(d, amount if (debit or not saw_signed) else None)
+                start_tx(d, amount if keep else None)
+                last_was_simple = False
             continue
 
         if m_date:
-            # новая транзакция начинается (дата/время на отдельной строке)
+            # строка с датой без суммы. Два сценария склейки:
+            #   a) описание предыдущей однострочной операции (дата + код + текст);
+            #   b) продолжение pending, у которого уже есть сумма, но нет описания
+            #      (дата + категория + сумма, описание следующей строкой).
+            rest = line[m_date.end():].strip()
+            rest_clean = _clean_desc(_AUTH_CODE_RE.sub("", rest, count=1))
+
+            # ВАЖНО: здесь не проверяем is_skip — в этом формате каждая строка
+            # описания содержит «Операция по карте», а skip-слова («операци»)
+            # предназначены только для отсева шапок при создании новой транзакции
+            if txs and last_was_simple and pending is None and rest_clean:
+                txs[-1]["description"] = rest_clean[:120]
+                last_was_simple = False
+                continue
+            if pending is not None and pending["amount"] is not None and not pending["desc"]:
+                if rest_clean:
+                    pending["desc"].append(rest_clean)
+                last_was_simple = False
+                continue
+
+            # иначе — новая транзакция начинается (дата/время на отдельной строке)
             flush()
+            last_was_simple = False
             d = _parse_date(m_date.group(1))
             if d and not is_skip:
-                rest = line[m_date.end():].strip()
                 start_tx(d, None, rest if not _TIME_ONLY_RE.fullmatch(rest) else "")
             continue
 
         if has_money:
             # строка суммы текущей транзакции (или итог/баланс внизу)
             if pending is not None and not is_skip:
-                debit = sign in "−–-"
-                pending["amount"] = amount if (debit or not saw_signed) else None
+                pending["amount"] = amount if _keep(sign) else None
+            last_was_simple = False
             continue
 
         # обычная строка: продолжение описания или шапка/шум
         if pending is not None and not is_skip and not _TIME_ONLY_RE.fullmatch(line):
             pending["desc"].append(line)
+        last_was_simple = False
 
     flush()
 

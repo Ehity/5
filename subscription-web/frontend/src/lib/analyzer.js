@@ -48,30 +48,49 @@ export async function extractPdfLines(buf) {
 // ---------------------------------------------------------------------------
 // Порт PDF-парсера из analyzer.py (_transactions_from_lines)
 // ---------------------------------------------------------------------------
-const PDF_SKIP_RE = /продолжение|страниц|сформирова|справк|выписк|сч[её]т|доступн|баланс|всего|итого|период|владелец|операци|статус|реквизит|валюта|назначение/i;
+const PDF_SKIP_RE = /продолжение|страниц|сформирова|справк|выписк|сч[её]т|доступн|баланс|всего|итого|период|владелец|операци|статус|реквизит|валюта|назначение|остаток|номер сч|дата откр|дата закрыт|действителен|расшифровк/i;
 const PDF_DATE_RE = /\b(\d{2}[./]\d{2}[./]\d{2,4})\b/;
 const PDF_TIME_ONLY_RE = /^[\d\s:.]+$/;
 const PDF_TIME_IN_DESC_RE = /\b\d{1,2}:\d{2}(?::\d{2})?\b/;
 const MONEY_STRICT = /(?<sign>[+−–-])\s*(?<whole>[\d\u00a0 ]+?)(?:[.,](?<frac>\d{1,2}))?\s*(?:₽|руб\.?|руб|RUB)/i;
 const MONEY_LOOSE = /(?<![0-9.,])(?:(?<sign>[+−–-])\s*)?(?<whole>[\d\u00a0 ]{2,})(?:[.,](?<frac>\d{1,2}))?\s*(?<curr>₽|руб\.?|руб|RUB)?(?![0-9])/i;
 
-function parseMoney(s, strict) {
-  const m = (strict ? MONEY_STRICT : MONEY_LOOSE).exec(s);
-  if (!m) return { sign: "", amount: null };
-  const sign = (m.groups.sign || "").trim();
-  const curr = m.groups.curr || "";
-  const wholeRaw = m.groups.whole || "";
-  const whole = wholeRaw.replace(/[\s\u00a0]/g, "");
-  const value = parseFloat(whole);
-  if (Number.isNaN(value)) return { sign: "", amount: null };
-  // свободный режим: отсеиваем телефоны и даты без признаков суммы
-  if (!strict && !sign && !curr && !/[\s\u00a0]/.test(wholeRaw)) {
-    return { sign: "", amount: null };
+function moneyMatches(s, strict) {
+  const base = strict ? MONEY_STRICT : MONEY_LOOSE;
+  const global = new RegExp(base.source, base.flags + "g");
+  const out = [];
+  for (const m of s.matchAll(global)) {
+    const sign = (m.groups.sign || "").trim();
+    const curr = m.groups.curr || "";
+    const wholeRaw = m.groups.whole || "";
+    const whole = wholeRaw.replace(/[\s ]/g, "");
+    const frac = m.groups.frac;
+    const value = parseFloat(whole);
+    if (Number.isNaN(value)) continue;
+    // свободный режим: настоящая сумма — знак, валюта, дробь или пробел-
+    // разделитель между цифрами; телефоны/даты/время отсекаются
+    if (!strict && !(sign || curr || frac || /\d[  ]\d/.test(wholeRaw))) continue;
+    // число, начинающее дату (26.06.2026), суммой не является
+    if (!strict && /^\d{1,2}[./]\d{1,2}[./]\d{2,4}/.test(s.slice(m.index).replace(/^\s+/, ""))) continue;
+    let amount = value;
+    if (frac) amount += parseInt(frac, 10) / 10 ** frac.length;
+    out.push({ sign, amount: Math.round(amount * 100) / 100, start: m.index });
   }
-  let amount = value;
-  const frac = m.groups.frac;
-  if (frac) amount += parseInt(frac, 10) / 10 ** frac.length;
-  return { sign, amount: Math.round(amount * 100) / 100 };
+  return out;
+}
+
+function parseMoney(s, strict) {
+  const matches = moneyMatches(s, strict);
+  if (!matches.length) return { sign: "", amount: null };
+  return { sign: matches[0].sign, amount: matches[0].amount };
+}
+
+const AUTH_CODE_RE = /^\d{4,8}\b\s*/;
+const OP_BY_CARD_RE = /\s*Операция по карте(?:\s*\*{2,}[\dx]+)?\s*$/i;
+
+function cleanDesc(desc) {
+  desc = desc.replace(OP_BY_CARD_RE, "");
+  return desc.replace(/\s+/g, " ").replace(/^[  −.–-]+|[  −.–-]+$/g, "").trim();
 }
 
 function parsePdfDateStr(s) {
@@ -83,13 +102,11 @@ function parsePdfDateStr(s) {
 
 /** Строки PDF-выписки -> [{date, amount, description}] (порт Python-версии). */
 export function transactionsFromLines(lines) {
-  const signOf = (l, strict) => {
-    const r = parseMoney(l, strict);
-    return "−–-".includes(r.sign) ? r.sign : "";
-  };
   const hasCurrency = lines.some((l) => /₽|руб|RUB/i.test(l));
-  const strict = hasCurrency && lines.some((l) => signOf(l, true));
-  const sawSigned = lines.some((l) => signOf(l, strict));
+  const allSigns = lines.map((l) => moneyMatches(l, false).map((m) => m.sign));
+  const strict = hasCurrency && allSigns.some((ss) => ss.some((s) => s && "−–-".includes(s)));
+  const sawMinus = strict && allSigns.some((ss) => ss.some((s) => s && "−–-".includes(s)));
+  const hasPlus = allSigns.some((ss) => ss.includes("+"));
 
   const txs = [];
   let pending = null;
@@ -99,62 +116,87 @@ export function transactionsFromLines(lines) {
       let desc = pending.desc.join(" ").replace(/\s+/g, " ").trim();
       desc = desc.replace(/^[ –−.-]+|[ –−.-]+$/g, "");
       desc = desc.replace(PDF_DATE_RE, " ").replace(PDF_TIME_IN_DESC_RE, " ");
-      desc = desc.replace(/\s+/g, " ").replace(/^[ –−.-]+|[ –−.-]+$/g, "").trim();
+      desc = cleanDesc(desc);
       if (desc) txs.push({ date: pending.date, amount: pending.amount, description: desc.slice(0, 120) });
     }
     pending = null;
   };
 
-  const startTx = (date, amount, descPart = "") => {
-    pending = { date, amount, desc: [] };
-    if (descPart && !PDF_SKIP_RE.test(descPart)) pending.desc.push(descPart);
-  };
+  let lastWasSimple = false; // предыдущая строка сама добавила транзакцию
 
   for (const line of lines) {
     const mDate = PDF_DATE_RE.exec(line);
-    const { sign, amount } = parseMoney(line, strict);
+    const matches = moneyMatches(line, strict);
+    const sign = matches[0]?.sign ?? "";
+    const amount = matches[0]?.amount ?? null;
     const isSkip = PDF_SKIP_RE.test(line);
-    const hasMoney = amount !== null;
+    const hasMoney = matches.length > 0;
 
     if (mDate && hasMoney) {
+      // однострочный формат: дата + (описание) + [сумма + остаток]
       flush();
       const d = parsePdfDateStr(mDate[1]);
       if (!d) continue;
-      const moneyM = (strict ? MONEY_STRICT : MONEY_LOOSE).exec(line);
-      let desc = line.slice(0, mDate.index) + " " + line.slice(mDate.index + mDate[0].length, moneyM.index);
-      desc = desc.replace(PDF_TIME_IN_DESC_RE, " ").replace(/\s+/g, " ").replace(/^[ –−.-]+|[ –−.-]+$/g, "").trim();
-      const debit = "−–-".includes(sign);
+      // в конце строки два числа: предпоследнее — сумма, последнее — остаток
+      const chosen = matches.length >= 2 ? matches[matches.length - 2] : matches[0];
+      let desc = line.slice(0, mDate.index) + " " + line.slice(mDate.index + mDate[0].length, chosen.start);
+      desc = desc.replace(PDF_TIME_IN_DESC_RE, " ");
+      desc = cleanDesc(desc);
+      const debit = "−–-".includes(chosen.sign);
+      const keep = sawMinus ? debit : hasPlus ? chosen.sign !== "+" : true;
       if (desc && !PDF_TIME_ONLY_RE.test(desc)) {
-        if (amount !== null && (debit || !sawSigned)) {
-          txs.push({ date: d, amount, description: desc.slice(0, 120) });
+        if (chosen.amount !== null && keep) {
+          txs.push({ date: d, amount: chosen.amount, description: desc.slice(0, 120) });
+          lastWasSimple = true;
+        } else {
+          lastWasSimple = false; // кредитная строка — не приклеивать описание
         }
       } else {
-        startTx(d, amount !== null && (debit || !sawSigned) ? amount : null);
+        pending = { date: d, amount: chosen.amount !== null && keep ? chosen.amount : null, desc: [] };
+        lastWasSimple = false;
       }
       continue;
     }
 
     if (mDate) {
+      // строка с датой без суммы: два сценария склейки (описание предыдущей
+      // однострочной операции либо продолжение pending с известной суммой)
+      const rest = line.slice(mDate.index + mDate[0].length).trim();
+      const restClean = cleanDesc(rest.replace(AUTH_CODE_RE, ""));
+      if (txs && lastWasSimple && pending === null && restClean) {
+        txs[txs.length - 1].description = restClean.slice(0, 120);
+        lastWasSimple = false;
+        continue;
+      }
+      if (pending !== null && pending.amount !== null && !pending.desc.length) {
+        if (restClean) pending.desc.push(restClean);
+        lastWasSimple = false;
+        continue;
+      }
       flush();
+      lastWasSimple = false;
       const d = parsePdfDateStr(mDate[1]);
       if (d && !isSkip) {
-        const rest = line.slice(mDate.index + mDate[0].length).trim();
-        startTx(d, null, PDF_TIME_ONLY_RE.test(rest) ? "" : rest);
+        const rest2 = line.slice(mDate.index + mDate[0].length).trim();
+        pending = { date: d, amount: null, desc: [] };
+        if (rest2 && !PDF_SKIP_RE.test(rest2) && !PDF_TIME_ONLY_RE.test(rest2)) pending.desc.push(rest2);
       }
       continue;
     }
 
     if (hasMoney) {
       if (pending !== null && !isSkip) {
-        const debit = "−–-".includes(sign);
-        pending.amount = amount !== null && (debit || !sawSigned) ? amount : null;
+        const keep = sawMinus ? "−–-".includes(sign) : hasPlus ? sign !== "+" : true;
+        pending.amount = keep && matches[0].amount !== null ? matches[0].amount : null;
       }
+      lastWasSimple = false;
       continue;
     }
 
     if (pending !== null && !isSkip && !PDF_TIME_ONLY_RE.test(line)) {
       pending.desc.push(line);
     }
+    lastWasSimple = false;
   }
 
   flush();
