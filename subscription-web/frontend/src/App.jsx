@@ -117,7 +117,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
-      <Header connected={connected} mock={data.mock} />
+      <Header />
 
       <main className="mx-auto max-w-7xl space-y-6 px-6 py-6">
         <SavingsBanner
