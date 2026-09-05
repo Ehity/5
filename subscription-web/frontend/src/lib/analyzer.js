@@ -108,6 +108,10 @@ const OP_BY_CARD_RE = /\s*Операция по карте(?:\s*\*{2,}[\dx]+)?\s
 // Движение денег между своими счетами и наличные — не подписки
 const INTERNAL_RE = /перевод|банкомат|вклад|наличн|пополнен|списание|сбербанк|стипендия|kartavklad|vklad|sberbank onl|qr[- ]?код/i;
 
+// Платежи ЖКХ и бюджетных учреждений (в т.ч. транслит из СБП-выписок:
+// USLU = «услуги», UCHREZD = «учреждение») — регулярные, но не подписки
+const UTILITY_RE = /жкх|гис жкх|тсж|квартплат|содержан|жиль[яе]|капремонт|капрем|водоканал|водоснабж|водоотвед|теплоснабж|теплосеть|энергосбыт|энергосб[у]|газпром|межрегионгаз|горгаз|еирц|еркц|расч[её]тн|домофон|тко|обращен|вывоз|услуг|услу|uslu|uchrezd|учрежд|жилищ|домоуправл|жэу|жэк|жилсервис|госуслуг|штраф|гибдд|налог|пошлин/i;
+
 function cleanDesc(desc) {
   desc = desc.replace(OP_BY_CARD_RE, "");
   return desc.replace(/\s+/g, " ").replace(/^[  −.–-]+|[  −.–-]+$/g, "").trim();
@@ -409,6 +413,8 @@ export function detectSubscriptions(txs) {
   for (const { key, items } of groups.values()) {
     // внутренние переводы и вклады — не подписки, даже при регулярности
     if (INTERNAL_RE.test(key.value)) continue;
+    // платежи ЖКХ и бюджетных учреждений — регулярные, но не подписки
+    if (UTILITY_RE.test(key.value)) continue;
     const minEvents = key.kind === "brand" ? 2 : 3;
     if (items.length < minEvents) continue;
     const { stable, current } = stableCharges(items);

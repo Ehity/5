@@ -288,3 +288,27 @@ def test_price_change_ignores_single_odd_payment():
     ]
     subs = detect_subscriptions(txs)
     assert subs[0]["price_change"]["hasChange"] is False
+
+
+def test_utility_payments_not_subscriptions():
+    # ЖКХ-платежи (СБП-идентификаторы с транслитом «услуги»): регулярные,
+    # но подписками быть не должны
+    txs = []
+    for i in range(4):
+        txs.append({"date": date(2026, 1, 5) + timedelta(days=30 * i),
+                    "amount": -6409.78,
+                    "description": "302328101501100603936,754.46 4900,941612\RU\Yekaterinburg\3DI2 FRISBI USLU*FRISB\\"})
+    txs.append({"date": date(2026, 5, 5), "amount": -500, "description": "ГИС ЖКХ КВАРТПЛАТА"})
+    subs = detect_subscriptions(txs)
+    assert subs == []
+
+
+def test_real_subscriptions_survive_utility_filter():
+    txs = [
+        {"date": date(2026, 1, 5) + timedelta(days=30 * i), "amount": -599.0,
+         "description": "NETFLIX.COM 866-579-7172 US"}
+        for i in range(5)
+    ]
+    subs = detect_subscriptions(txs)
+    assert len(subs) == 1
+    assert subs[0]["name"] == "Netflix"
