@@ -10,7 +10,7 @@ export default function MonthlyChart({ data, mock = true, hasSubscriptions = tru
   const realData = !mock && !hasSubscriptions;
   const title = realData ? "Общие расходы по выписке" : "Расходы на подписки по месяцам";
   const subtitle = realData ? "Списания по всем транзакциям за последние 6 месяцев"
-                            : "Динамика за последние 6 месяцев";
+                            : "Реальные списания подписок за последние 6 месяцев";
   const label = realData ? "Расходы" : "Подписки";
 
   // Плоская серия (все месяцы одинаковые) не о чём не говорит — вместо
@@ -54,19 +54,29 @@ export default function MonthlyChart({ data, mock = true, hasSubscriptions = tru
                 <stop offset="100%" stopColor="#21A038" stopOpacity={0.02} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" />
+            <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" vertical={false} />
             <XAxis dataKey="month" tick={{ fill: "#64748B", fontSize: 12 }} axisLine={false} tickLine={false} />
             <YAxis tick={{ fill: "#64748B", fontSize: 12 }} axisLine={false} tickLine={false}
-                   tickFormatter={(v) => `${v / 1000}к`} />
+                   width={56}
+                   tickFormatter={(v) => `${Math.round(v).toLocaleString("ru-RU")} ₽`} />
             <Tooltip
+              cursor={{ stroke: "#21A038", strokeWidth: 1, strokeDasharray: "4 4" }}
               contentStyle={{
                 background: "#0E1526", border: "1px solid #1E293B",
                 borderRadius: 12, color: "#E2E8F0",
               }}
               formatter={(v) => [fmt(v), label]}
             />
-            <Area type="monotone" dataKey="spent" stroke="#21A038" strokeWidth={2.5}
-                  fill="url(#sberFill)" />
+            <Area
+              type="monotone"
+              dataKey="spent"
+              stroke="#21A038"
+              strokeWidth={3}
+              fill="url(#sberFill)"
+              dot={{ r: 3, fill: "#21A038", stroke: "#0B0F1A", strokeWidth: 2 }}
+              activeDot={{ r: 6, fill: "#21A038", stroke: "#E2E8F0", strokeWidth: 2 }}
+              animationDuration={700}
+            />
           </AreaChart>
         </ResponsiveContainer>
       </div>

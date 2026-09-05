@@ -612,6 +612,27 @@ export function monthlyExpenseSeries(subs, months = 6) {
   return series;
 }
 
+/** Расходы на подписки по месяцам из фактических списаний (живой график). */
+export function monthlyExpenseSeriesFromTxs(txs, subs, months = 6) {
+  const today = new Date();
+  const merchants = new Map();
+  for (const s of subs) for (const m of s.merchants) merchants.set(m, s);
+  const series = [];
+  for (let i = months - 1; i >= 0; i--) {
+    const d = addMonths(new Date(today.getFullYear(), today.getMonth(), 1), -i);
+    let total = 0;
+    for (const t of txs) {
+      const sub = merchants.get(t.description);
+      if (!sub) continue;
+      if (t.date.getFullYear() === d.getFullYear() && t.date.getMonth() === d.getMonth()) {
+        total += Math.abs(t.amount);
+      }
+    }
+    series.push({ month: `${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`, spent: +total.toFixed(2) });
+  }
+  return series;
+}
+
 export function monthlyExpenseSeriesAll(txs, months = 6) {
   const today = new Date();
   const series = [];
@@ -661,6 +682,98 @@ export function buildLetter({ name, amount }) {
 }
 
 // Детерминированная тестовая выписка для браузерного режима (без backend).
+// ---------------------------------------------------------------------------
+// Генератор демо-PDF в браузере: минимальный валидный PDF с текстовыми
+// страницами (без зависимостей). Кириллицы нет — демо-описания латиницей.
+// ---------------------------------------------------------------------------
+
+const CYR_TO_LAT = {
+  А: "A", Б: "B", В: "V", Г: "G", Д: "D", Е: "E", Ё: "E", Ж: "Zh", З: "Z",
+  И: "I", Й: "Y", К: "K", Л: "L", М: "M", Н: "N", О: "O", П: "P", Р: "R",
+  С: "S", Т: "T", У: "U", Ф: "F", Х: "Kh", Ц: "Ts", Ч: "Ch", Ш: "Sh",
+  Щ: "Shch", Ъ: "", Ы: "Y", Ь: "", Э: "E", Ю: "Yu", Я: "Ya",
+};
+
+function toAscii(s) {
+  return String(s)
+    .split("")
+    .map((ch) => CYR_TO_LAT[ch.toUpperCase()] ?? ch)
+    .join("")
+    .replace(/[^\x20-\x7E]/g, "?");
+}
+
+function pdfEscape(s) {
+  return toAscii(s).split("\\").join("\\\\").split("(").join("\\(").split(")").join("\\)");
+}
+
+// Собирает PDF-байты из готовых страниц (массивы строк {text, bold, size}).
+function buildPdf(pages) {
+  const objs = []; // строки-объекты, индекс = номер объекта - 1
+  const pageObjNums = [];
+  const firstPageObj = 5;
+  pages.forEach((_, i) => pageObjNums.push(firstPageObj + i * 2));
+
+  objs[0] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objs[1] = "<< /Type /Pages /Kids [" + pageObjNums.map((n) => n + " 0 R").join(" ") + "] /Count " + pages.length + " >>";
+  objs[2] = "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>";
+  objs[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold >>";
+  pages.forEach((pageLines, i) => {
+    const pageNum = firstPageObj + i * 2;
+    const contentNum = pageNum + 1;
+    let stream = "";
+    let y = 800;
+    for (const line of pageLines) {
+      if (line.text !== undefined) {
+        const font = line.bold ? "/F2" : "/F1";
+        stream += "BT " + font + " " + (line.size || 10) + " Tf 40 " + y + " Td (" + pdfEscape(line.text) + ") Tj ET\n";
+      }
+      y -= line.size ? Math.max(line.size + 6, 14) : 15;
+    }
+    objs[pageNum - 1] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+      + "/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents " + contentNum + " 0 R >>";
+    objs[contentNum - 1] = "<< /Length " + stream.length + " >>\nstream\n" + stream + "endstream";
+  });
+
+  let out = "%PDF-1.4\n";
+  const offsets = [];
+  objs.forEach((body, i) => {
+    offsets.push(out.length);
+    out += (i + 1) + " 0 obj\n" + body + "\nendobj\n";
+  });
+  const xrefStart = out.length;
+  out += "xref\n0 " + (objs.length + 1) + "\n0000000000 65535 f \n";
+  for (const off of offsets) out += String(off).padStart(10, "0") + " 00000 n \n";
+  out += "trailer\n<< /Size " + (objs.length + 1) + " /Root 1 0 R >>\nstartxref\n" + xrefStart + "\n%%EOF";
+  const bytes = new Uint8Array(out.length);
+  for (let i = 0; i < out.length; i++) bytes[i] = out.charCodeAt(i) & 0xff;
+  return bytes;
+}
+
+/** Демо-PDF из текста выписки (CSV): шапка + таблица операций. */
+export function makeDemoPdf(csvText) {
+  const rows = csvText.split(/\r?\n/).filter((l) => l.trim()).slice(1);
+  const pageLines = [];
+  const today = new Date();
+  pageLines.push({ text: "TEST BANK STATEMENT", bold: true, size: 14 });
+  pageLines.push({ text: "Demo document for Subscription Scanner", size: 9 });
+  pageLines.push({ text: "Period: " + dateKey(addMonths(today, -6)) + " - " + dateKey(today), size: 9 });
+  pageLines.push({ text: "" });
+  pageLines.push({ text: "Date          Description                          Amount, RUB", bold: true, size: 10 });
+  pageLines.push({ text: "" });
+  for (const row of rows) {
+    const [d, desc, amt] = row.split(",");
+    if (!d || !desc || !amt) continue;
+    const dd = d.split("-").reverse().join(".");
+    pageLines.push({ text: (dd + "        " + desc.slice(0, 34)).padEnd(44, " ") + " " + amt, size: 9 });
+  }
+  pageLines.push({ text: "" });
+  pageLines.push({ text: "Generated by Subscription Scanner (demo)", size: 8 });
+  // разбивка на страницы по ~48 строк
+  const pages = [];
+  for (let i = 0; i < pageLines.length; i += 48) pages.push(pageLines.slice(i, i + 48));
+  return buildPdf(pages);
+}
+
 export function testStatementCsv() {
   const today = new Date();
   const base = new Date(today.getFullYear(), today.getMonth() - 6, 5);
@@ -678,12 +791,12 @@ export function testStatementCsv() {
     });
   };
 
-  pushMonthly("NETFLIX.COM", [599, 599, 599, 599, 599]);
-  pushMonthly("KINOPOISK HD", [399, 399, 399, 399]);           // входит в Яндекс Плюс
-  pushMonthly("START.RU", [299, 299, 299, 299, 299]);          // дубль категории «Кино и видео»
+  pushMonthly("NETFLIX.COM", [599, 599, 599, 599, 599], 1);    // подключился на 2-м месяце
+  pushMonthly("KINOPOISK HD", [399, 399, 399, 399], 2);        // входит в Яндекс Плюс
+  pushMonthly("START.RU", [299, 299, 299, 299, 299], 0);       // дубль категории «Кино и видео»
   pushMonthly("YANDEX_PLUS", [399, 399, 399, 399, 399, 399]);
   pushMonthly("ZVUK SUBSCRIPTION", [99, 99, 299, 299], 3);     // промо → полная цена, свежая подписка
-  pushMonthly("WORLD CLASS", [3490, 3490, 4990, 4990]);        // подняли тариф +43%
+  pushMonthly("WORLD CLASS", [3490, 3490, 4990, 4990], 2);     // подняли тариф +43%
 
   // случайные дополнительные подписки — демо каждый раз разное
   const extras = [

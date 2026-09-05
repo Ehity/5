@@ -21,8 +21,8 @@ from pydantic import BaseModel
 from analyzer import (
     demo_payload,
     detect_subscriptions,
-    monthly_expense_series,
     monthly_expense_series_all,
+    monthly_expense_series_from_txs,
     parse_csv,
     parse_pdf,
 )
@@ -112,7 +112,7 @@ async def upload_statement(file: UploadFile = File(...)) -> dict:
     result = {
         "mock": False,
         "subscriptions": subs,
-        "monthly": monthly_expense_series(subs),
+        "monthly": monthly_expense_series_from_txs(txs, subs),
         "total_monthly": round(sum(abs(s["monthly_cost"]) for s in subs), 2),
         "total_yearly": round(sum(abs(s["yearly_cost"]) for s in subs), 2),
         "message": f"Выписка «{file.filename}»: {len(txs)} транзакций, найдено подписок: {len(subs)}",

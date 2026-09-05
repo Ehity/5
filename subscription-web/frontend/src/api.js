@@ -1,6 +1,6 @@
 import {
-  buildLetter, detectSubscriptions, extractPdfLines,
-  monthlyExpenseSeries, monthlyExpenseSeriesAll,
+  buildLetter, detectSubscriptions, extractPdfLines, makeDemoPdf,
+  monthlyExpenseSeriesAll, monthlyExpenseSeriesFromTxs,
   parseCsvText, testStatementCsv, transactionsFromLines,
 } from "./lib/analyzer.js";
 
@@ -37,7 +37,7 @@ async function analyzeTransactions(txs) {
   return {
     mock: false,
     subscriptions: subs,
-    monthly: monthlyExpenseSeries(subs),
+    monthly: monthlyExpenseSeriesFromTxs(txs, subs),
     total_monthly: +subs.reduce((acc, s) => acc + Math.abs(s.monthly_cost), 0).toFixed(2),
     total_yearly: +subs.reduce((acc, s) => acc + Math.abs(s.yearly_cost), 0).toFixed(2),
     message: `Выписка: ${txs.length} транзакций, найдено подписок: ${subs.length}`,
@@ -145,7 +145,10 @@ export async function fetchTestPreview() {
     const data = await res.json();
     return { csv: data.csv_text, pdfUrl: base64ToPdfUrl(data.pdf_base64) };
   }
-  return { csv: testStatementCsv(), pdfUrl: null };
+  const csv = testStatementCsv();
+  const pdfBytes = makeDemoPdf(csv);
+  const pdfUrl = URL.createObjectURL(new Blob([pdfBytes], { type: "application/pdf" }));
+  return { csv, pdfUrl };
 }
 
 /** Загружает тестовую выписку на скан (в браузерном режиме — анализ на месте). */

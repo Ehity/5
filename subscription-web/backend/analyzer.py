@@ -723,6 +723,31 @@ def monthly_expense_series(subs: list[dict], months: int = 6) -> list[dict]:
     return series
 
 
+def monthly_expense_series_from_txs(txs: list[dict], subs: list[dict], months: int = 6) -> list[dict]:
+    """Расходы на подписки по месяцам из ФАКТИЧЕСКИХ списаний.
+
+    В отличие от monthly_expense_series (ровная модель регулярных платежей),
+    здесь видны пропуски месяцев и смены цены — график живой, как в выписке.
+    """
+    today = date.today()
+    merchants: dict[str, dict] = {}
+    for s in subs:
+        for m in s.get("merchants", []):
+            merchants[m] = s
+    series = []
+    for i in range(months - 1, -1, -1):
+        d = _add_months(today.replace(day=1), -i)
+        total = 0.0
+        for t in txs:
+            sub = merchants.get(t["description"])
+            if sub is None:
+                continue
+            if t["date"].year == d.year and t["date"].month == d.month:
+                total += abs(t["amount"])
+        series.append({"month": d.strftime("%m.%Y"), "spent": round(total, 2)})
+    return series
+
+
 def monthly_expense_series_all(txs: list[dict], months: int = 6) -> list[dict]:
     """Реальные списания по месяцам из ВСЕХ транзакций (не только подписки).
 
