@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { X, Download, FileText, FileImage, Loader2, Table2, FileUp } from "lucide-react";
 
-// iOS Safari не умеет показывать PDF внутри <object>/<embed> — только скачать
-const isAppleDevice =
-  /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+// Мобильные браузеры (iOS и Android) не показывают PDF внутри <object>/<embed> —
+// только скачивание. На десктопе встроенный просмотр работает.
+const isMobileDevice =
+  /Android|iPad|iPhone|iPod|Opera Mini|IEMobile/i.test(navigator.userAgent) ||
+  (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform));
 
 export default function PreviewModal({ csv, pdfUrl, onClose, onSubmit }) {
   const [activeTab, setActiveTab] = useState("csv");
@@ -126,12 +127,12 @@ export default function PreviewModal({ csv, pdfUrl, onClose, onSubmit }) {
           )}
 
           {activeTab === "pdf" && pdfUrl && (
-            isAppleDevice ? (
+            isMobileDevice ? (
               <div className="flex flex-col items-center gap-3 py-8">
                 <FileImage size={36} className="text-emerald-400" />
                 <p className="max-w-xs text-center text-sm text-slate-400">
-                  iOS не показывает PDF внутри страницы. Скачайте файл — он откроется
-                  во встроенном просмотрщике.
+                  Мобильные браузеры не показывают PDF внутри страницы.
+                  Скачайте файл — он откроется во встроенном просмотрщике.
                 </p>
                 <a
                   href={pdfUrl}
