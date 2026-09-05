@@ -3,6 +3,164 @@
 
 import { detectSubscriptionPriceChange } from "./subscriptionPriceChange.js";
 
+// pdf.js грузим лениво: модуль анализатора остаётся пригодным для Node-тестов.
+let _pdfjs = null;
+async function getPdfjs() {
+  if (!_pdfjs) {
+    const [lib, { default: workerUrl }] = await Promise.all([
+      import("pdfjs-dist"),
+      import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
+    ]);
+    lib.GlobalWorkerOptions.workerSrc = workerUrl;
+    _pdfjs = lib;
+  }
+  return _pdfjs;
+}
+
+/** Извлекает строки текста из PDF-выписки (координатная сборка строк). */
+export async function extractPdfLines(buf) {
+  const pdfjsLib = await getPdfjs();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const lines = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    const items = content.items
+      .filter((it) => it.str !== undefined)
+      .map((it) => ({ str: it.str, x: it.transform[4], y: Math.round(it.transform[5]) }))
+      .sort((a, b) => b.y - a.y || a.x - b.x);
+    let lastY = null;
+    let line = "";
+    for (const it of items) {
+      if (lastY !== null && Math.abs(it.y - lastY) > 2) {
+        if (line.trim()) lines.push(line.trim());
+        line = "";
+      }
+      if (line && !line.endsWith(" ") && it.str && !it.str.startsWith(" ")) line += " ";
+      line += it.str;
+      lastY = it.y;
+    }
+    if (line.trim()) lines.push(line.trim());
+  }
+  return lines.filter((l) => l.trim());
+}
+
+// ---------------------------------------------------------------------------
+// Порт PDF-парсера из analyzer.py (_transactions_from_lines)
+// ---------------------------------------------------------------------------
+const PDF_SKIP_RE = /продолжение|страниц|сформирова|справк|выписк|сч[её]т|доступн|баланс|всего|итого|период|владелец|операци|статус|реквизит|валюта|назначение/i;
+const PDF_DATE_RE = /\b(\d{2}[./]\d{2}[./]\d{2,4})\b/;
+const PDF_TIME_ONLY_RE = /^[\d\s:.]+$/;
+const PDF_TIME_IN_DESC_RE = /\b\d{1,2}:\d{2}(?::\d{2})?\b/;
+const MONEY_STRICT = /(?<sign>[+−–-])\s*(?<whole>[\d\u00a0 ]+?)(?:[.,](?<frac>\d{1,2}))?\s*(?:₽|руб\.?|руб|RUB)/i;
+const MONEY_LOOSE = /(?<![0-9.,])(?:(?<sign>[+−–-])\s*)?(?<whole>[\d\u00a0 ]{2,})(?:[.,](?<frac>\d{1,2}))?\s*(?<curr>₽|руб\.?|руб|RUB)?(?![0-9])/i;
+
+function parseMoney(s, strict) {
+  const m = (strict ? MONEY_STRICT : MONEY_LOOSE).exec(s);
+  if (!m) return { sign: "", amount: null };
+  const sign = (m.groups.sign || "").trim();
+  const curr = m.groups.curr || "";
+  const wholeRaw = m.groups.whole || "";
+  const whole = wholeRaw.replace(/[\s\u00a0]/g, "");
+  const value = parseFloat(whole);
+  if (Number.isNaN(value)) return { sign: "", amount: null };
+  // свободный режим: отсеиваем телефоны и даты без признаков суммы
+  if (!strict && !sign && !curr && !/[\s\u00a0]/.test(wholeRaw)) {
+    return { sign: "", amount: null };
+  }
+  let amount = value;
+  const frac = m.groups.frac;
+  if (frac) amount += parseInt(frac, 10) / 10 ** frac.length;
+  return { sign, amount: Math.round(amount * 100) / 100 };
+}
+
+function parsePdfDateStr(s) {
+  const m = s.match(/^(\d{2})[./](\d{2})[./](\d{2,4})$/);
+  if (!m) return null;
+  const y = m[3].length === 2 ? 2000 + +m[3] : +m[3];
+  return new Date(y, +m[2] - 1, +m[1]);
+}
+
+/** Строки PDF-выписки -> [{date, amount, description}] (порт Python-версии). */
+export function transactionsFromLines(lines) {
+  const signOf = (l, strict) => {
+    const r = parseMoney(l, strict);
+    return "−–-".includes(r.sign) ? r.sign : "";
+  };
+  const hasCurrency = lines.some((l) => /₽|руб|RUB/i.test(l));
+  const strict = hasCurrency && lines.some((l) => signOf(l, true));
+  const sawSigned = lines.some((l) => signOf(l, strict));
+
+  const txs = [];
+  let pending = null;
+
+  const flush = () => {
+    if (pending && pending.amount !== null) {
+      let desc = pending.desc.join(" ").replace(/\s+/g, " ").trim();
+      desc = desc.replace(/^[ –−.-]+|[ –−.-]+$/g, "");
+      desc = desc.replace(PDF_DATE_RE, " ").replace(PDF_TIME_IN_DESC_RE, " ");
+      desc = desc.replace(/\s+/g, " ").replace(/^[ –−.-]+|[ –−.-]+$/g, "").trim();
+      if (desc) txs.push({ date: pending.date, amount: pending.amount, description: desc.slice(0, 120) });
+    }
+    pending = null;
+  };
+
+  const startTx = (date, amount, descPart = "") => {
+    pending = { date, amount, desc: [] };
+    if (descPart && !PDF_SKIP_RE.test(descPart)) pending.desc.push(descPart);
+  };
+
+  for (const line of lines) {
+    const mDate = PDF_DATE_RE.exec(line);
+    const { sign, amount } = parseMoney(line, strict);
+    const isSkip = PDF_SKIP_RE.test(line);
+    const hasMoney = amount !== null;
+
+    if (mDate && hasMoney) {
+      flush();
+      const d = parsePdfDateStr(mDate[1]);
+      if (!d) continue;
+      const moneyM = (strict ? MONEY_STRICT : MONEY_LOOSE).exec(line);
+      let desc = line.slice(0, mDate.index) + " " + line.slice(mDate.index + mDate[0].length, moneyM.index);
+      desc = desc.replace(PDF_TIME_IN_DESC_RE, " ").replace(/\s+/g, " ").replace(/^[ –−.-]+|[ –−.-]+$/g, "").trim();
+      const debit = "−–-".includes(sign);
+      if (desc && !PDF_TIME_ONLY_RE.test(desc)) {
+        if (amount !== null && (debit || !sawSigned)) {
+          txs.push({ date: d, amount, description: desc.slice(0, 120) });
+        }
+      } else {
+        startTx(d, amount !== null && (debit || !sawSigned) ? amount : null);
+      }
+      continue;
+    }
+
+    if (mDate) {
+      flush();
+      const d = parsePdfDateStr(mDate[1]);
+      if (d && !isSkip) {
+        const rest = line.slice(mDate.index + mDate[0].length).trim();
+        startTx(d, null, PDF_TIME_ONLY_RE.test(rest) ? "" : rest);
+      }
+      continue;
+    }
+
+    if (hasMoney) {
+      if (pending !== null && !isSkip) {
+        const debit = "−–-".includes(sign);
+        pending.amount = amount !== null && (debit || !sawSigned) ? amount : null;
+      }
+      continue;
+    }
+
+    if (pending !== null && !isSkip && !PDF_TIME_ONLY_RE.test(line)) {
+      pending.desc.push(line);
+    }
+  }
+
+  flush();
+  return txs.sort((a, b) => a.date - b.date);
+}
+
 export const BRAND_RULES = [
   ["Яндекс Плюс", "Развлечения", "🟡",
     ["YNDX", "YANDEX_PLUS", "YANDEX PLUS", "ЯНДЕКС.ПЛЮС", "ЯНДЕКС ПЛЮС", "ЯНДЕКС+", "YANDEX.MUSIC", "ПЛЮС МУЗЫК", "МУЗЫКА ПЛЮС"]],
@@ -124,6 +282,8 @@ function groupKey(description) {
   return { kind: "norm", value: normalizeDescription(description) };
 }
 
+const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
 function addMonths(d, months) {
   const m = d.getMonth() + months; // 0-based, как getMonth()
   const year = d.getFullYear() + Math.floor(m / 12);
@@ -212,9 +372,9 @@ export function detectSubscriptions(txs) {
       monthly_cost: +monthly.toFixed(2),
       yearly_cost: +(monthly * 12).toFixed(2),
       charges: stable.length,
-      first_charge: stable[0].date.toISOString().slice(0, 10),
-      last_charge: last.toISOString().slice(0, 10),
-      next_charge: addMonths(last, period === "monthly" ? 1 : 12).toISOString().slice(0, 10),
+      first_charge: dateKey(stable[0].date),
+      last_charge: dateKey(last),
+      next_charge: dateKey(addMonths(last, period === "monthly" ? 1 : 12)),
       merchants: [...new Set(stable.map((t) => t.description))].sort(),
       price_change: detectSubscriptionPriceChange(items),
     });
@@ -228,10 +388,71 @@ export function detectSubscriptions(txs) {
 }
 
 const COLUMN_ALIASES = {
-  date: ["date", "дата операции", "дата", "дата платежа", "operation date"],
-  amount: ["amount", "сумма", "сумма платежа", "сумма операции", "списание"],
-  description: ["description", "описание", "наименование", "получатель", "merchant"],
+  date: ["date", "дата", "дата операции", "дата платежа", "operation date", "transaction date"],
+  amount: ["amount", "сумма", "сумма платежа", "сумма операции", "списание", "value"],
+  description: ["description", "описание", "наименование", "получатель", "merchant", "назначение", "details", "memo"],
 };
+
+function normalizeHeader(h) {
+  return String(h)
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/\(.*?\)/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/[^\wа-я ]/gi, " ")
+    .trim();
+}
+
+function pickColumns(headers) {
+  const norm = headers.map(normalizeHeader);
+  const pick = {};
+  // 1) точное совпадение с алиасами
+  for (const [kind, aliases] of Object.entries(COLUMN_ALIASES)) {
+    const i = norm.findIndex((h) => aliases.includes(h));
+    if (i >= 0) pick[kind] = i;
+  }
+  // 2) вхождение: «сумма» ⊂ «сумма операции», «date» ⊂ «transaction date»
+  for (const [kind, aliases] of Object.entries(COLUMN_ALIASES)) {
+    if (pick[kind] !== undefined) continue;
+    const i = norm.findIndex(
+      (h) => h.length >= 3 && aliases.some((a) => h.includes(a) || a.includes(h))
+    );
+    if (i >= 0) pick[kind] = i;
+  }
+  return { pick, norm };
+}
+
+// Эвристика по содержимому: даты/числа/текст (для нестандартных заголовков).
+function guessMissingColumns(rows, headers, pick) {
+  const DATE_RE = /\d{1,4}[./-]\d{1,2}[./-]\d{2,4}/;
+  const sample = rows.slice(0, 50);
+  const stats = [];
+  for (let i = 0; i < headers.length; i++) {
+    if (Object.values(pick).includes(i)) continue;
+    const vals = sample.map((r) => String(r[i] ?? "")).filter((v) => v.trim());
+    if (!vals.length) continue;
+    const dateN = vals.filter((v) => DATE_RE.test(v)).length;
+    let numN = 0;
+    for (const v of vals) {
+      if (Number.isFinite(parseFloat(v.replace(/[^\d.,-]/g, "").replace(",", ".")))) numN++;
+    }
+    const textN = vals.reduce((a, v) => a + v.length, 0) / vals.length;
+    stats.push({ i, dateN, numN, textN });
+  }
+  if (!Object.hasOwn(pick, "date")) {
+    const best = stats.filter((s) => s.dateN > 0).sort((a, b) => b.dateN - a.dateN)[0];
+    if (best) { pick.date = best.i; }
+  }
+  if (!Object.hasOwn(pick, "amount")) {
+    const best = stats.filter((s) => s.i !== pick.date && s.numN > 0).sort((a, b) => b.numN - a.numN)[0];
+    if (best) { pick.amount = best.i; }
+  }
+  if (!Object.hasOwn(pick, "description")) {
+    const best = stats.filter((s) => s.i !== pick.date && s.i !== pick.amount)
+      .sort((a, b) => b.textN - a.textN)[0];
+    if (best) { pick.description = best.i; }
+  }
+}
 
 function parseDateStr(s) {
   for (const [fmt, re] of [
@@ -272,17 +493,20 @@ export function parseCsvText(text) {
   const delim = [";", ",", "\t"]
     .map((d) => [d, header.split(d).length])
     .sort((a, b) => b[1] - a[1])[0][0];
-  const cols = header.split(delim).map((h) => h.toLowerCase().trim());
-  const pick = {};
-  for (const [kind, aliases] of Object.entries(COLUMN_ALIASES)) {
-    pick[kind] = cols.findIndex((c) => aliases.includes(c));
+  const headers = header.split(delim);
+  const { pick } = pickColumns(headers);
+  const rows = lines.slice(1).map((l) => csvSplit(l, delim));
+  if (Object.values(pick).some((i) => i === undefined) || Object.keys(pick).length < 3) {
+    guessMissingColumns(rows, headers, pick);
   }
-  if (pick.date < 0 || pick.amount < 0 || pick.description < 0) {
-    throw new Error("В CSV нет нужных колонок: Дата / Сумма / Описание. Найдены: " + cols.join(", "));
+  if ([pick.date, pick.amount, pick.description].some((i) => i === undefined)) {
+    throw new Error(
+      "Не удалось определить в CSV колонки «Дата / Сумма / Описание». Заголовки: " +
+      headers.join(", ")
+    );
   }
   const txs = [];
-  for (const line of lines.slice(1)) {
-    const cells = csvSplit(line, delim);
+  for (const cells of rows) {
     const d = parseDateStr(cells[pick.date] || "");
     const amount = parseFloat(String(cells[pick.amount] ?? "").replace(/[^\d.,-]/g, "").replace(",", "."));
     const desc = String(cells[pick.description] ?? "").trim();
@@ -370,7 +594,7 @@ export function testStatementCsv() {
   const pushMonthly = (name, amounts, startOffset = 0) => {
     amounts.forEach((amt, i) => {
       const d = addMonths(base, i + startOffset);
-      rows.push(`${d.toISOString().slice(0, 10)},${name},-${amt.toFixed(2)}`);
+      rows.push(`${dateKey(d)},${name},-${amt.toFixed(2)}`);
     });
   };
   pushMonthly("NETFLIX.COM", [599, 599, 599, 599, 599]);
@@ -385,7 +609,7 @@ export function testStatementCsv() {
   ];
   noise.forEach(([name, amt], i) => {
     const d = addMonths(base, i);
-    rows.push(`${d.toISOString().slice(0, 10)},${name},-${amt.toFixed(2)}`);
+    rows.push(`${dateKey(d)},${name},-${amt.toFixed(2)}`);
   });
   return rows.join("\n");
 }

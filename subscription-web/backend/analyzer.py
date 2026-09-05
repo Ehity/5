@@ -114,11 +114,85 @@ def _parse_date(s: str) -> date | None:
 
 
 COLUMN_ALIASES = {
-    "date": ["date", "дата операции", "дата", "дата платежа", "operation date"],
-    "amount": ["amount", "сумма", "сумма платежа", "сумма операции", "списание"],
-    "description": ["description", "описание", "наименование", "получатель", "merchant"],
+    "date": ["date", "дата", "дата операции", "дата платежа", "operation date", "transaction date"],
+    "amount": ["amount", "сумма", "сумма платежа", "сумма операции", "списание", "value"],
+    "description": ["description", "описание", "наименование", "получатель", "merchant", "назначение", "details", "memo"],
     "category": ["category", "категория", "тип"],
 }
+
+
+def _norm_header(h: str) -> str:
+    """Нормализуем заголовок: нижний регистр, без скобок/знаков, ё→е."""
+    s = str(h).lower().replace("ё", "е")
+    s = re.sub(r"\(.*?\)", " ", s)
+    s = re.sub(r"[^\wа-я ]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _pick_columns(rows: list[dict]) -> dict:
+    """Ищет колонки: точное совпадение → вхождение → эвристика по данным."""
+    headers = list(rows[0])
+    norm = {h: _norm_header(h) for h in headers}
+    pick: dict[str, str] = {}
+    for kind, aliases in COLUMN_ALIASES.items():
+        for h in headers:
+            if norm[h] in aliases:
+                pick[kind] = h
+                break
+    for kind, aliases in COLUMN_ALIASES.items():
+        if kind in pick:
+            continue
+        for h in headers:
+            if len(norm[h]) >= 3 and any(a in norm[h] or norm[h] in a for a in aliases):
+                pick[kind] = h
+                break
+
+    if not {"date", "amount", "description"}.issubset(pick):
+        _guess_columns(rows, headers, pick)
+    return pick
+
+
+_DATE_IN_CELL_RE = re.compile(r"\d{1,4}[./-]\d{1,2}[./-]\d{2,4}")
+
+
+def _guess_columns(rows: list[dict], headers: list, pick: dict) -> None:
+    """Эвристика для нестандартных заголовков: колонка с датами — «дата»,
+    колонка с числами — «сумма», самая длинная текстовая — «описание»."""
+    sample = rows[:50]
+    stats: list[tuple] = []
+    for h in headers:
+        if h in pick.values():
+            continue
+        vals = [str(r.get(h, "")) for r in sample if str(r.get(h, "")).strip()]
+        if not vals:
+            continue
+        date_n = sum(1 for v in vals if _DATE_IN_CELL_RE.search(v))
+        num_n = 0
+        for v in vals:
+            try:
+                float(re.sub(r"[^\d.,-]", "", v).replace(",", "."))
+                num_n += 1
+            except ValueError:
+                pass
+        text_n = sum(len(v) for v in vals) / len(vals)
+        stats.append((h, date_n, num_n, text_n))
+
+    if "date" not in pick:
+        best = max((s for s in stats if s[1] > 0), key=lambda s: s[1], default=None)
+        if best:
+            pick["date"] = best[0]
+            stats = [s for s in stats if s[0] != best[0]]
+    if "amount" not in pick:
+        best = max((s for s in stats if s[0] != pick.get("date") and s[2] > 0),
+                   key=lambda s: s[2], default=None)
+        if best:
+            pick["amount"] = best[0]
+            stats = [s for s in stats if s[0] != best[0]]
+    if "description" not in pick:
+        best = max((s for s in stats if s[0] not in (pick.get("date"), pick.get("amount"))),
+                   key=lambda s: s[3], default=None)
+        if best:
+            pick["description"] = best[0]
 
 
 def parse_csv(content: bytes) -> list[dict]:
@@ -142,15 +216,12 @@ def parse_csv(content: bytes) -> list[dict]:
     if not rows:
         return []
 
-    cols = {k.lower().strip(): k for k in rows[0]}
-    pick = {}
-    for kind, aliases in COLUMN_ALIASES.items():
-        for alias in aliases:
-            if alias in cols:
-                pick[kind] = cols[alias]
-                break
+    pick = _pick_columns(rows)
     if not {"date", "amount", "description"}.issubset(pick):
-        raise ValueError(f"В CSV нет нужных колонок, найдены: {list(rows[0].keys())}")
+        raise ValueError(
+            "Не удалось определить в CSV колонки «Дата / Сумма / Описание». "
+            f"Заголовки: {list(rows[0].keys())}"
+        )
 
     txs = []
     for row in rows:

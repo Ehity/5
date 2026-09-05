@@ -51,6 +51,27 @@ def test_parse_csv_missing_columns_raises():
         parse_csv(b"foo,bar\n1,2")
 
 
+def test_parse_csv_fuzzy_headers():
+    # «Дата и время», «Сумма (руб)», «Назначение платежа» — не точные алиасы
+    rows = ["Дата и время;Сумма (руб);Назначение платежа",
+            "01.07.2026;-599,00;ЯНДЕКС.ПЛЮС"]
+    txs = parse_csv("\n".join(rows).encode("cp1251"))
+    assert len(txs) == 1
+    assert txs[0]["description"] == "ЯНДЕКС.ПЛЮС"
+    assert txs[0]["amount"] == -599.0
+
+
+def test_parse_csv_positional_guess():
+    # вообще нестандартные заголовки — колонки угадываются по содержимому
+    rows = ["Col1,Col2,Col3",
+            "2026-07-01,NETFLIX.COM,-599.00",
+            "2026-07-02,NETFLIX.COM,-599.00"]
+    txs = parse_csv("\n".join(rows).encode("utf-8"))
+    assert len(txs) == 2
+    assert txs[0]["description"] == "NETFLIX.COM"
+    assert txs[0]["amount"] == -599.0
+
+
 def test_parse_csv_skips_rows_without_date():
     rows = ["Date,Description,Amount", "2026-07-01,NETFLIX,-599.00", ",NETFLIX,-599.00"]
     txs = parse_csv("\n".join(rows).encode("utf-8"))

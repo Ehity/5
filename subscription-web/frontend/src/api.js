@@ -1,6 +1,7 @@
 import {
-  buildLetter, detectSubscriptions, monthlyExpenseSeries,
-  monthlyExpenseSeriesAll, parseCsvText, testStatementCsv,
+  buildLetter, detectSubscriptions, extractPdfLines,
+  monthlyExpenseSeries, monthlyExpenseSeriesAll,
+  parseCsvText, testStatementCsv, transactionsFromLines,
 } from "./lib/analyzer.js";
 
 const BASE = "";
@@ -21,8 +22,7 @@ async function detectMode() {
   return mode;
 }
 
-async function analyzeInBrowser(text) {
-  const txs = parseCsvText(text);
+async function analyzeTransactions(txs) {
   const subs = detectSubscriptions(txs);
   if (!subs.length) {
     return {
@@ -42,6 +42,10 @@ async function analyzeInBrowser(text) {
     total_yearly: +subs.reduce((acc, s) => acc + Math.abs(s.yearly_cost), 0).toFixed(2),
     message: `Выписка: ${txs.length} транзакций, найдено подписок: ${subs.length}`,
   };
+}
+
+async function analyzeCsvText(text) {
+  return analyzeTransactions(parseCsvText(text));
 }
 
 function emptyState() {
@@ -85,23 +89,31 @@ export async function uploadStatement(file) {
     if (!res.ok) throw new Error(data.detail || "Ошибка загрузки файла");
     return data;
   }
-  // Браузерный режим: CSV/TXT анализируем на месте, PDF — только на сервере.
+  // Браузерный режим: CSV и PDF анализируем на месте (pdf.js).
   const fname = (file.name || "").toLowerCase();
-  if (fname.endsWith(".pdf")) {
-    throw new Error("PDF поддерживается серверной версией (start_web.bat). В браузерном режиме загрузите CSV-выписку.");
-  }
-  if (!fname.endsWith(".csv") && !fname.endsWith(".txt")) {
-    throw new Error("Поддерживаются форматы CSV и PDF (выписка СберБанк Онлайн)");
-  }
-  const text = await readFileText(file);
-  let result;
   try {
-    result = await analyzeInBrowser(text);
+    if (fname.endsWith(".pdf")) {
+      const buf = await file.arrayBuffer();
+      const lines = await extractPdfLines(buf);
+      const txs = transactionsFromLines(lines);
+      if (!txs.length) {
+        throw new Error("В PDF не найдено транзакций. Убедитесь, что это текстовая выписка (не скан).");
+      }
+      const result = await analyzeTransactions(txs);
+      result.message = `Выписка «${file.name}»: ${txs.length} транзакций${result.subscriptions.length ? `, найдено подписок: ${result.subscriptions.length}` : ""}`;
+      sessionStorage.setItem("scannerState", JSON.stringify(result));
+      return result;
+    }
+    if (!fname.endsWith(".csv") && !fname.endsWith(".txt")) {
+      throw new Error("Поддерживаются форматы CSV и PDF (выписка СберБанк Онлайн)");
+    }
+    const text = await readFileText(file);
+    const result = await analyzeCsvText(text);
+    sessionStorage.setItem("scannerState", JSON.stringify(result));
+    return result;
   } catch (e) {
     throw new Error(e.message || "Не удалось разобрать файл");
   }
-  sessionStorage.setItem("scannerState", JSON.stringify(result));
-  return result;
 }
 
 export async function resetToDemo() {
@@ -147,7 +159,7 @@ export async function uploadTestToScan(csvText) {
     if (!res.ok) throw new Error(data.detail || "Ошибка загрузки тестовой выписки");
     return data;
   }
-  const result = await analyzeInBrowser(csvText);
+  const result = await analyzeCsvText(csvText);
   sessionStorage.setItem("scannerState", JSON.stringify(result));
   return result;
 }
