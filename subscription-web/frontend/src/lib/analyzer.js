@@ -113,7 +113,7 @@ const INTERNAL_RE = /перевод|банкомат|вклад|наличн|п�
 const UTILITY_RE = /жкх|гис жкх|тсж|квартплат|содержан|жиль[яе]|капремонт|капрем|водоканал|водоснабж|водоотвед|теплоснабж|теплосеть|энергосбыт|энергосб[у]|газпром|межрегионгаз|горгаз|еирц|еркц|расч[её]тн|домофон|тко|обращен|вывоз|услуг|услу|uslu|uchrezd|учрежд|жилищ|домоуправл|жэу|жэк|жилсервис|госуслуг|штраф|гибдд|налог|пошлин/i;
 
 // Покупки в рознице и по QR (даже регулярные и одинаковые) — не подписки
-const RETAIL_RE = /пятер|pyater|красное[ &-]*белое|krasnoe|магнит|magnit|монетк|monetka|fixprice|дикси|dixy|лента|lenta|озон|ozon|wildberries|вайлдберр|аптек|apteka|aptech|starbucks|старбакс|kfc|макдоналдс|mcdonalds|cinemapark|cinema park|бургер|burger|qr[- ]?код|покупк|moskva|moscow|ekaterinburg|перекрест|perekrestok|вкусно и точка|vkusnoitochka|столовая|кофейн|coffe|coffee/i;
+const RETAIL_RE = /qr|тбанк|т-?банк|t[- ]?банк|tbank|универсальн|альфа|alfa|совком|sovcom|втб|vtb|райф|raif|пятер|pyater|красное[ &-]*белое|krasnoe|магнит|magnit|монетк|monetka|fixprice|дикси|dixy|лента|lenta|озон|ozon|wildberries|вайлдберр|аптек|apteka|aptech|starbucks|старбакс|kfc|макдоналдс|mcdonalds|cinemapark|cinema park|бургер|burger|qr[- ]?код|покупк|moskva|moscow|ekaterinburg|перекрест|perekrestok|вкусно и точка|vkusnoitochka|столовая|кофейн|coffe|coffee/i;
 
 function cleanDesc(desc) {
   desc = desc.replace(OP_BY_CARD_RE, "");
@@ -442,6 +442,8 @@ export function detectSubscriptions(txs) {
     const title = key.kind === "brand" ? key.value : key.value.replace(/\w\S*/g, (w) => w[0] + w.slice(1).toLowerCase()) || "Подписка";
     const canon = canonicalName(stable[stable.length - 1].description) || [title, "Прочее", "💳"];
     const name = key.kind === "brand" ? canon[0] : title;
+    // имя-обрывок («Qr») — не подписка
+    if (name.trim().length < 3) continue;
     const last = stable[stable.length - 1].date;
     // следующее списание: дата в будущем даже если платежи давно прекратились
     let nextDate = addMonths(last, period === "monthly" ? 1 : 12);

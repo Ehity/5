@@ -340,3 +340,19 @@ def test_next_charge_always_in_future():
             "description": "NETFLIX.COM"} for i in range(5)]
     subs = detect_subscriptions(txs)
     assert subs[0]["next_charge"] >= date.today().isoformat()
+
+
+def test_bank_transfers_and_qr_not_subscriptions():
+    # переводы в другой банк и покупки по QR (кейс с телефона) — не подписки
+    txs = []
+    for i in range(8):
+        txs.append({"date": date(2026, i + 1, 16), "amount": -440.0,
+                    "description": "АО ТБАНК УНИВЕРСАЛЬНЫЙ КЛАССИЧЕСКИЙ"})
+    for i in range(9):
+        txs.append({"date": date(2026, i + 1, 18), "amount": -150.0,
+                    "description": "Покупка по QR-коду №019dde39"})
+    for i in range(5):
+        txs.append({"date": date(2026, i + 1, 5), "amount": -599.0,
+                    "description": "NETFLIX.COM"})
+    subs = detect_subscriptions(txs)
+    assert [s["name"] for s in subs] == ["Netflix"]

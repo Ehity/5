@@ -176,6 +176,7 @@ _UTILITY_RE = re.compile(
 # Покупки в рознице и по QR (даже регулярные и одинаковые) — не подписки.
 # Сюда же — обрывки СБП-описаний с городом (MOSKVA/MOSCOW/Ekaterinburg)
 _RETAIL_RE = re.compile(
+    r"qr|тбанк|т-?банк|t[- ]?банк|tbank|универсальн|альфа|alfa|совком|sovcom|втб|vtb|райф|raif|"
     r"пятер|pyater|красное[ &-]*белое|krasnoe|магнит|magnit|монетк|monetka|"
     r"fixprice|дикси|dixy|лента|lenta|озон|ozon|wildberries|вайлдберр|аптек|apteka|aptech|"
     r"starbucks|старбакс|kfc|макдоналдс|mcdonalds|cinemapark|cinema park|бургер|burger|"
@@ -722,6 +723,9 @@ def detect_subscriptions(txs: list[dict]) -> list[dict]:
         monthly = price if period == "monthly" else price / 12
         title = key[1] if key[0] == "brand" else key[1].title() or "Подписка"
         name, cat, icon = canonical_name(stable[-1]["description"]) or (title, "Прочее", "💳")
+        # имя-обрывок («Qr») — не подписка
+        if len(name.strip()) < 3:
+            continue
         # следующее списание: дата в будущем даже если платежи давно прекратились
         next_date = _add_months(last, 1 if period == "monthly" else 12)
         while next_date < date.today():
