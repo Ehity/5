@@ -24,8 +24,10 @@ export default function UpcomingCharges({ subscriptions }) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // следующая дата списания: next_charge, докрученная до будущего
+  // следующая дата списания: next_charge, докрученная до будущего.
+  // Подписки с пометкой «похоже, уже отменена» в календаре не показываем
   const upcoming = subscriptions
+    .filter((sub) => sub.active !== false)
     .map((sub) => {
       let d = new Date(sub.next_charge + "T00:00:00");
       if (Number.isNaN(d.getTime())) return null;
