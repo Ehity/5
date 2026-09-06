@@ -1,61 +1,4 @@
-// Порт analyzer.py + services_db.py на JavaScript — позволяет работать
-// полностью в браузере (GitHub Pages) без backend.
-
-import { detectSubscriptionPriceChange } from "./subscriptionPriceChange.js";
-
-// pdf.js грузим лениво: модуль анализатора остаётся пригодным для Node-тестов.
-let _pdfjs = null;
-async function getPdfjs() {
-  if (!_pdfjs) {
-    const [lib, { default: workerUrl }] = await Promise.all([
-      import("pdfjs-dist/legacy/build/pdf.mjs"),
-      import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url"),
-    ]);
-    lib.GlobalWorkerOptions.workerSrc = workerUrl;
-    _pdfjs = lib;
-  }
-  return _pdfjs;
-}
-
-/** Извлекает строки текста из PDF-выписки (координатная сборка строк). */
-export async function extractPdfLines(buf) {
-  let pdf;
-  try {
-    const pdfjsLib = await getPdfjs();
-    pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-  } catch (e) {
-    console.error(e);
-    throw new Error(
-      "Не удалось обработать PDF в этом браузере. Попробуйте обновить iOS/браузер или загрузите CSV-выписку."
-    );
-  }
-  const lines = [];
-  for (let p = 1; p <= pdf.numPages; p++) {
-    const page = await pdf.getPage(p);
-    const content = await page.getTextContent();
-    const items = content.items
-      .filter((it) => it.str !== undefined)
-      .map((it) => ({ str: it.str, x: it.transform[4], y: Math.round(it.transform[5]) }))
-      .sort((a, b) => b.y - a.y || a.x - b.x);
-    let lastY = null;
-    let line = "";
-    for (const it of items) {
-      if (lastY !== null && Math.abs(it.y - lastY) > 2) {
-        if (line.trim()) lines.push(line.trim());
-        line = "";
-      }
-      if (line && !line.endsWith(" ") && it.str && !it.str.startsWith(" ")) line += " ";
-      line += it.str;
-      lastY = it.y;
-    }
-    if (line.trim()) lines.push(line.trim());
-  }
-  return lines.filter((l) => l.trim());
-}
-
-// ---------------------------------------------------------------------------
-// Порт PDF-парсера из analyzer.py (_transactions_from_lines)
-// ---------------------------------------------------------------------------
+import { detectSubscriptionPriceChange } from "./src/lib/subscriptionPriceChange.js";
 const PDF_SKIP_RE = /продолжение|страниц|сформирова|справк|выписк|сч[её]т|доступн|баланс|всего|итого|период|владелец|операци|статус|реквизит|валюта|назначение|остаток|номер сч|дата откр|дата закрыт|действителен|расшифровк|расход|поступлен|кэшб/i;
 const PDF_DATE_RE = /\b(\d{2}[./]\d{2}[./]\d{2,4})\b/;
 const PDF_TIME_ONLY_RE = /^[\d\s:.]+$/;
@@ -90,7 +33,8 @@ export function moneyMatches(s, strict) {
     let amount = value;
     if (frac) amount += parseInt(frac, 10) / 10 ** frac.length;
     // 10+ цифр — номера счетов, коды авторизации и телефоны, не суммы
-    if (amount >= 1e9 || whole.length >= 10) continue;
+    if (amount >= 1e9 || whole.length >= 10) { if (sign === "-") console.error("BIG-MINUS:", JSON.stringify(m[0].slice(0, 60))); continue; }
+    if (sign === "-") console.error("MINUS-MATCH:", JSON.stringify(m[0].slice(0, 60)));
     out.push({ sign, amount: Math.round(amount * 100) / 100, start: m.index });
   }
   return out;
@@ -110,10 +54,10 @@ const INTERNAL_RE = /перевод|банкомат|вклад|наличн|п�
 
 // Платежи ЖКХ и бюджетных учреждений (в т.ч. транслит из СБП-выписок:
 // USLU = «услуги», UCHREZD = «учреждение») — регулярные, но не подписки
-const UTILITY_RE = /жкх|гис жкх|тсж|квартплат|содержан|жиль[яе]|капремонт|капрем|водоканал|водоснабж|водоотвед|теплоснабж|теплосеть|энергосбыт|энергосб[у]|газпром|межрегионгаз|горгаз|еирц|еркц|расч[её]тн|домофон|тко|обращен|вывоз|услуг|услу|uslu|uchrezd|учрежд|жилищ|домоуправл|жэу|жэк|жилсервис|госуслуг|штраф|гибдд|налог|пошлин| ip /i;
+const UTILITY_RE = /жкх|гис жкх|тсж|квартплат|содержан|жиль[яе]|капремонт|капрем|водоканал|водоснабж|водоотвед|теплоснабж|теплосеть|энергосбыт|энергосб[у]|газпром|межрегионгаз|горгаз|еирц|еркц|расч[её]тн|домофон|тко|обращен|вывоз|услуг|услу|uslu|uchrezd|учрежд|жилищ|домоуправл|жэу|жэк|жилсервис|госуслуг|штраф|гибдд|налог|пошлин/i;
 
 // Покупки в рознице и по QR (даже регулярные и одинаковые) — не подписки
-const RETAIL_RE = /qr|тбанк|т-?банк|t[- ]?банк|tbank|универсальн|альфа|alfa|совком|sovcom|втб|vtb|райф|raif|пятер|pyater|красное[ &-]*белое|krasnoe|магнит|magnit|монетк|monetka|fixprice|дикси|dixy|лента|lenta|озон|ozon|wildberries|вайлдберр|аптек|apteka|aptech|starbucks|старбакс|kfc|макдоналдс|mcdonalds|cinemapark|cinema park|бургер|burger|qr[- ]?код|покупк|moskva|moscow|ekaterinburg|перекрест|perekrestok|вкусно и точка|vkusnoitochka|столовая|кофейн|coffe|coffee/i;
+const RETAIL_RE = /qr|тбанк|т-?банк|t[- ]?банк|tbank|универсальн|альфа|alfa|совком|sovcom|втб|vtb|райф|raif|пятер|pyater|красное[ &-]*белое|krasnoe|магнит|magnit|монетк|monetka|fixprice|дикси|dixy|лента|lenta|озон|ozon|wildberries|вайлдберр|аптек|apteka|aptech|starbucks|старбакс|kfc|макдоналдс|mcdonalds|cinemapark|cinema park|бургер|burger|qr[- ]?код|покупк|moskva|moscow|ekaterinburg|перекрест|perekrestok|вкусно и точка|vkusnoitochka|столовая|кофейн|coffe|coffee/i;
 
 function cleanDesc(desc) {
   desc = desc.replace(OP_BY_CARD_RE, "");
@@ -133,13 +77,8 @@ export function transactionsFromLines(lines) {
   const hasCurrency = lines.some((l) => /₽|руб|RUB/i.test(l));
   // шапку («• Расходы - 45 384.88 ₽») не учитываем: её минус включает
   // строгий режим и обнуляет парсинг беззнаковых списаний
-  // знак строки — знак ПЕРВОГО принятого матча (как в Python), иначе
-  // дефис внутри названия («TK Lenta-165») включает строгий режим
   const allSigns = lines.filter((l) => !PDF_SKIP_RE.test(l))
-    .map((l) => {
-      const ms = moneyMatches(l, false);
-      return ms.length ? [ms[0].sign] : [];
-    });
+    .map((l) => moneyMatches(l, false).map((m) => m.sign));
   const strict = hasCurrency && allSigns.some((ss) => ss.some((s) => s && "−–-".includes(s)));
   const sawMinus = strict && allSigns.some((ss) => ss.some((s) => s && "−–-".includes(s)));
   const hasPlus = allSigns.some((ss) => ss.includes("+"));
@@ -183,7 +122,7 @@ export function transactionsFromLines(lines) {
       const keep = sawMinus ? debit : hasPlus ? chosen.sign !== "+" : true;
       if (desc && !PDF_TIME_ONLY_RE.test(desc)) {
         if (chosen.amount !== null && chosen.amount !== 0 && keep) {
-          txs.push({ date: d, amount: chosen.amount, description: desc.slice(0, 120) });
+          console.error("PUSH:", chosen.amount);txs.push({ date: d, amount: chosen.amount, description: desc.slice(0, 120) });
           lastWasSimple = true;
         } else {
           lastWasSimple = false; // кредитная строка — не приклеивать описание
@@ -842,77 +781,4 @@ function buildPdf(pages) {
   return bytes;
 }
 
-/** Демо-PDF из текста выписки (CSV): шапка + таблица операций. */
-export function makeDemoPdf(csvText) {
-  const rows = csvText.split(/\r?\n/).filter((l) => l.trim()).slice(1);
-  const pageLines = [];
-  const today = new Date();
-  pageLines.push({ text: "TEST BANK STATEMENT", bold: true, size: 14 });
-  pageLines.push({ text: "Demo document for Subscription Scanner", size: 9 });
-  pageLines.push({ text: "Period: " + dateKey(addMonths(today, -6)) + " - " + dateKey(today), size: 9 });
-  pageLines.push({ text: "" });
-  pageLines.push({ text: "Date          Description                          Amount, RUB", bold: true, size: 10 });
-  pageLines.push({ text: "" });
-  for (const row of rows) {
-    const [d, desc, amt] = row.split(",");
-    if (!d || !desc || !amt) continue;
-    const dd = d.split("-").reverse().join(".");
-    pageLines.push({ text: (dd + "        " + desc.slice(0, 34)).padEnd(44, " ") + " " + amt, size: 9 });
-  }
-  pageLines.push({ text: "" });
-  pageLines.push({ text: "Generated by Subscription Scanner (demo)", size: 8 });
-  // разбивка на страницы по ~48 строк
-  const pages = [];
-  for (let i = 0; i < pageLines.length; i += 48) pages.push(pageLines.slice(i, i + 48));
-  return buildPdf(pages);
-}
 
-export function testStatementCsv() {
-  const today = new Date();
-  const base = new Date(today.getFullYear(), today.getMonth() - 6, 5);
-  const rows = [["Date", "Description", "Amount"].join(",")];
-  // джиттер ±2% — не ломает детекцию (порог цены 5%), но демо всегда новое
-  const jitter = (v) => Math.round(v * (1 + (Math.random() * 0.04 - 0.02)) * 100) / 100;
-
-  const pushMonthly = (name, amounts, startOffset = 0) => {
-    amounts.forEach((amt, i) => {
-      // редкий пропуск месяца, но не больше одного и не для промо/смены цены
-      if (amounts.length >= 4 && Math.random() < 0.1 && i > 0 && i < amounts.length - 1) return;
-      const d = addMonths(base, i + startOffset);
-      const shifted = new Date(d.getFullYear(), d.getMonth(), Math.max(1, Math.min(28, d.getDate() + Math.round(Math.random() * 4 - 2))));
-      rows.push(`${dateKey(shifted)},${name},-${jitter(amt).toFixed(2)}`);
-    });
-  };
-
-  pushMonthly("NETFLIX.COM", [599, 599, 599, 599, 599], 1);    // подключился на 2-м месяце
-  pushMonthly("KINOPOISK HD", [399, 399, 399, 399], 2);        // входит в Яндекс Плюс
-  pushMonthly("START.RU", [299, 299, 299, 299, 299], 0);       // дубль категории «Кино и видео»
-  pushMonthly("YANDEX_PLUS", [399, 399, 399, 399, 399, 399]);
-  pushMonthly("ZVUK SUBSCRIPTION", [99, 99, 299, 299], 3);     // промо → полная цена, свежая подписка
-  pushMonthly("WORLD CLASS", [3490, 3490, 4990, 4990], 2);     // подняли тариф +43%
-
-  // случайные дополнительные подписки — демо каждый раз разное
-  const extras = [
-    ["OKKO.SUBSCRIPTION", 449], ["KION.RU", 249], ["VK.COM MUSIC", 299], ["MEGOGO.RU", 199],
-  ];
-  const extraCount = Math.floor(Math.random() * 3); // 0..2
-  const pool = [...extras];
-  for (let n = 0; n < extraCount && pool.length; n++) {
-    const [name, amt] = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
-    const count = 4 + Math.floor(Math.random() * 2);
-    pushMonthly(name, Array(count).fill(amt), Math.floor(Math.random() * 2));
-  }
-
-  // шум — случайные покупки, не похожие на бренды
-  const noise = [
-    ["PYATEROCHKA", 340.5], ["MAGNIT", 890], ["APTEKA", 610.3],
-    ["STARBUCKS", 430.7], ["KFC", 398], ["CINEMA PARK", 720],
-  ];
-  const noiseCount = 3 + Math.floor(Math.random() * 3);
-  for (let n = 0; n < noiseCount; n++) {
-    const [name, amt] = noise[Math.floor(Math.random() * noise.length)];
-    const d = addMonths(base, Math.floor(Math.random() * 5));
-    rows.push(`${dateKey(d)},${name},-${jitter(amt).toFixed(2)}`);
-  }
-  return rows.join("\n");
-}

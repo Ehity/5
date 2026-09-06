@@ -168,7 +168,7 @@ _UTILITY_RE = re.compile(
     r"жкх|гис жкх|тсж|квартплат|содержан|жиль[яе]|капремонт|капрем|"
     r"водоканал|водоснабж|водоотвед|теплоснабж|теплосеть|энергосбыт|энергосб[у]|"
     r"газпром|межрегионгаз|горгаз|газserv|газserv|еирц|еркц|расч[её]тн|"
-    r"домофон|тко|обращен|вывоз|услуг|услу|uslu|uchrezd|учрежд|жилищ|"
+    r"домофон|тко|обращен|вывоз|услуг|услу|uslu|uchrezd|учрежд|жилищ| ip |"
     r"домоуправл|жэу|жэк|жилсервис|госуслуг|штраф|гибдд|налог|пошлин",
     re.IGNORECASE,
 )
@@ -310,7 +310,8 @@ def parse_csv(content: bytes) -> list[dict]:
 _PDF_SKIP_RE = re.compile(
     r"продолжение|страниц|сформирова|справк|выписк|счёт|счет|доступн|"
     r"баланс|всего|итого|период|владелец|операци|статус|реквизит|валюта|назначение|"
-    r"остаток|номер сч|дата откр|дата закрыт|действителен|расшифровк",
+    r"остаток|номер сч|дата откр|дата закрыт|действителен|расшифровк|"
+    r"расход|поступлен|кэшб|баланс на",
     re.IGNORECASE,
 )
 _DATE_RE = re.compile(r"\b(\d{2}[./]\d{2}[./]\d{2,4})\b")
@@ -359,7 +360,7 @@ def _money_matches(s: str, strict: bool) -> list[tuple[str, float, int]]:
             continue
         v = value + (int(frac) / 10 ** len(frac) if frac else 0)
         # 10+ цифр — это номера счетов, коды авторизации и телефоны, не суммы
-        if v >= 1_000_000_000:
+        if v >= 1_000_000_000 or len(whole) >= 10:
             continue
         out.append((sign, round(v, 2), m.start()))
     return out
@@ -384,8 +385,9 @@ _OP_BY_CARD_RE = re.compile(r"\s*Операция по карте(?:\s*\*{2,}[\d
 
 
 def _clean_desc(desc: str) -> str:
-    """Убирает служебный хвост «Операция по карте ****0490» из описания."""
+    """Убирает служебный хвост «Операция по карте ****0490», даты и мусор."""
     desc = _OP_BY_CARD_RE.sub("", desc)
+    desc = _DATE_RE.sub(" ", desc)
     return re.sub(r"\s+", " ", desc).strip(" -–−.")
 
 
@@ -418,7 +420,8 @@ def _transactions_from_lines(lines: list[str]) -> list[dict]:
     # беззнаковые суммы (напр. "599.0 RUB") парсятся свободным режимом,
     # чтобы тестовые PDF-выписки не теряли транзакции вообще.
     strict = has_currency and any(
-        (s := _parse_money(l, True)[0]) and s in "−–-" for l in lines
+        (s := _parse_money(l, True)[0]) and s in "−–-"
+        for l in lines if not _PDF_SKIP_RE.search(l)
     )
 
     signs = [_parse_money(l, strict)[0] for l in lines]
@@ -472,6 +475,8 @@ def _transactions_from_lines(lines: list[str]) -> list[dict]:
 
         if m_date and has_money:
             # однострочный формат: дата + (описание) + [сумма + остаток]
+            if is_skip:
+                continue
             flush()
             d = _parse_date(m_date.group(1))
             if not d:
