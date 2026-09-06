@@ -170,24 +170,20 @@ class LetterRequest(BaseModel):
 
 
 
-# Российские сервисы — им корректно ссылаться на законы РФ. Зарубежным
-# (Netflix, Spotify и т.п.), ушедшим из РФ, пишем англоязычное письмо без
-# отсылок к российским законам — те на них не распространяются.
-RU_SERVICES = {
-    "яндекс плюс", "иви", "okko", "кион", "kion", "кинопоиск", "premier",
-    "амедиатека", "more.tv", "start", "wink", "мегого", "megogo",
-    "сберпрайм", "world class", "звук", "vk музыка", "яндекс go",
+# Зарубежные сервисы, ушедшие из РФ, — им англоязычное письмо без ссылок на
+# законы РФ. ВСЕ ОСТАЛЬНЫЕ (включая неизвестные и латинские названия вроде
+# «Moscow Rus» — выписки печатают имена латиницей) — русское письмо с законами РФ.
+FOREIGN_SERVICES = {
+    "netflix", "spotify", "apple music", "apple tv+", "icloud+", "icloud",
+    "youtube premium", "google one", "microsoft 365", "adobe",
+    "canva", "canva pro", "figma", "notion", "telegram premium",
 }
-_FOREIGN_RE = re.compile(r"[A-Za-z]")
 
 
 def is_ru_service(name: str) -> bool:
-    """Российский ли это сервис: известный из словаря или кириллическое имя."""
+    """Русское письмо — всем, кроме явно известных зарубежных сервисов."""
     low = name.strip().lower()
-    if low in RU_SERVICES:
-        return True
-    # неизвестное имя: кириллица — скорее всего российский сервис
-    return not _FOREIGN_RE.search(name) and any("а" <= ch.lower() <= "я" or ch.lower() == "ё" for ch in low)
+    return low not in FOREIGN_SERVICES
 
 
 LETTER_TEMPLATE = """Кому: Служба поддержки «{name}»

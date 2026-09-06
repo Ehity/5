@@ -312,3 +312,31 @@ def test_real_subscriptions_survive_utility_filter():
     subs = detect_subscriptions(txs)
     assert len(subs) == 1
     assert subs[0]["name"] == "Netflix"
+
+
+def test_retail_purchases_not_subscriptions():
+    # регулярные покупки в рознице и по QR — не подписки (кейс с телефона)
+    txs = []
+    for i in range(9):
+        txs.append({"date": date(2026, i % 12 + 1, 12), "amount": -94.0,
+                    "description": "KRASNOE BELOE Qr"})
+    for i in range(11):
+        txs.append({"date": date(2026, i % 12 + 1, 21), "amount": -65.0,
+                    "description": "ПЯТЕРOCHKA"})  # смешанные алфавиты
+    for i in range(5):
+        txs.append({"date": date(2026, i + 1, 8), "amount": -394.0,
+                    "description": "Moscow Rus"})
+    # настоящая подписка среди розницы должна выжить
+    for i in range(5):
+        txs.append({"date": date(2026, i + 1, 5), "amount": -599.0,
+                    "description": "NETFLIX.COM"})
+    subs = detect_subscriptions(txs)
+    assert [s["name"] for s in subs] == ["Netflix"]
+
+
+def test_next_charge_always_in_future():
+    # подписка перестала списываться год назад — next_charge всё равно в будущем
+    txs = [{"date": date(2025, 3, 5) + timedelta(days=30 * i), "amount": -599.0,
+            "description": "NETFLIX.COM"} for i in range(5)]
+    subs = detect_subscriptions(txs)
+    assert subs[0]["next_charge"] >= date.today().isoformat()

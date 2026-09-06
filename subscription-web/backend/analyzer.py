@@ -173,6 +173,17 @@ _UTILITY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Покупки в рознице и по QR (даже регулярные и одинаковые) — не подписки.
+# Сюда же — обрывки СБП-описаний с городом (MOSKVA/MOSCOW/Ekaterinburg)
+_RETAIL_RE = re.compile(
+    r"пятер|pyater|красное[ &-]*белое|krasnoe|магнит|magnit|монетк|monetka|"
+    r"fixprice|дикси|dixy|лента|lenta|озон|ozon|wildberries|вайлдберр|аптек|apteka|aptech|"
+    r"starbucks|старбакс|kfc|макдоналдс|mcdonalds|cinemapark|cinema park|бургер|burger|"
+    r"qr[- ]?код|покупк|moskva|moscow|ekaterinburg|перекрест|perekrestok|дэйли|daily|"
+    r"вкусно и точка|vkusnoitochka|столовая|кофейн|coffe|coffee",
+    re.IGNORECASE,
+)
+
 
 def _guess_columns(rows: list[dict], headers: list, pick: dict) -> None:
     """Эвристика для нестандартных заголовков: колонка с датами — «дата»,
@@ -680,6 +691,9 @@ def detect_subscriptions(txs: list[dict]) -> list[dict]:
         # платежи ЖКХ и бюджетных учреждений — регулярные, но не подписки
         if _UTILITY_RE.search(str(key[1])):
             continue
+        # покупки в рознице и по QR — не подписки, даже если повторяются
+        if _RETAIL_RE.search(str(key[1])):
+            continue
         min_events = 2 if key[0] == "brand" else 3  # брендовые сервисы достаточны уже с 2 списаниями
         if len(items) < min_events:  # минимум списаний, чтобы отличать подписку от случайных совпадений
             continue
@@ -708,6 +722,10 @@ def detect_subscriptions(txs: list[dict]) -> list[dict]:
         monthly = price if period == "monthly" else price / 12
         title = key[1] if key[0] == "brand" else key[1].title() or "Подписка"
         name, cat, icon = canonical_name(stable[-1]["description"]) or (title, "Прочее", "💳")
+        # следующее списание: дата в будущем даже если платежи давно прекратились
+        next_date = _add_months(last, 1 if period == "monthly" else 12)
+        while next_date < date.today():
+            next_date = _add_months(next_date, 1 if period == "monthly" else 12)
         subs.append({
             "id": re.sub(r"\W+", "_", title.lower())[:40] or "sub",
             "name": name if key[0] == "brand" else title,
@@ -720,7 +738,7 @@ def detect_subscriptions(txs: list[dict]) -> list[dict]:
             "charges": len(stable),
             "first_charge": stable[0]["date"].isoformat(),
             "last_charge": last.isoformat(),
-            "next_charge": _add_months(last, 1 if period == "monthly" else 12).isoformat(),
+            "next_charge": next_date.isoformat(),
             "merchants": sorted({t["description"] for t in stable}),
             "price_change": detect_price_change(items),
         })

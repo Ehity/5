@@ -112,6 +112,9 @@ const INTERNAL_RE = /перевод|банкомат|вклад|наличн|п�
 // USLU = «услуги», UCHREZD = «учреждение») — регулярные, но не подписки
 const UTILITY_RE = /жкх|гис жкх|тсж|квартплат|содержан|жиль[яе]|капремонт|капрем|водоканал|водоснабж|водоотвед|теплоснабж|теплосеть|энергосбыт|энергосб[у]|газпром|межрегионгаз|горгаз|еирц|еркц|расч[её]тн|домофон|тко|обращен|вывоз|услуг|услу|uslu|uchrezd|учрежд|жилищ|домоуправл|жэу|жэк|жилсервис|госуслуг|штраф|гибдд|налог|пошлин/i;
 
+// Покупки в рознице и по QR (даже регулярные и одинаковые) — не подписки
+const RETAIL_RE = /пятер|pyater|красное[ &-]*белое|krasnoe|магнит|magnit|монетк|monetka|fixprice|дикси|dixy|лента|lenta|озон|ozon|wildberries|вайлдберр|аптек|apteka|aptech|starbucks|старбакс|kfc|макдоналдс|mcdonalds|cinemapark|cinema park|бургер|burger|qr[- ]?код|покупк|moskva|moscow|ekaterinburg|перекрест|perekrestok|вкусно и точка|vkusnoitochka|столовая|кофейн|coffe|coffee/i;
+
 function cleanDesc(desc) {
   desc = desc.replace(OP_BY_CARD_RE, "");
   return desc.replace(/\s+/g, " ").replace(/^[  −.–-]+|[  −.–-]+$/g, "").trim();
@@ -380,6 +383,7 @@ function stableCharges(items) {
 }
 
 export function detectSubscriptions(txs) {
+  const today = new Date();
   // микросписания (< 1 ₽) и нули — обрывки реквизитов, не операции
   txs = txs.filter((t) => Math.abs(t.amount) >= 1);
   const groups = new Map();
@@ -415,6 +419,8 @@ export function detectSubscriptions(txs) {
     if (INTERNAL_RE.test(key.value)) continue;
     // платежи ЖКХ и бюджетных учреждений — регулярные, но не подписки
     if (UTILITY_RE.test(key.value)) continue;
+    // покупки в рознице и по QR — не подписки, даже если повторяются
+    if (RETAIL_RE.test(key.value)) continue;
     const minEvents = key.kind === "brand" ? 2 : 3;
     if (items.length < minEvents) continue;
     const { stable, current } = stableCharges(items);
@@ -437,6 +443,12 @@ export function detectSubscriptions(txs) {
     const canon = canonicalName(stable[stable.length - 1].description) || [title, "Прочее", "💳"];
     const name = key.kind === "brand" ? canon[0] : title;
     const last = stable[stable.length - 1].date;
+    // следующее списание: дата в будущем даже если платежи давно прекратились
+    let nextDate = addMonths(last, period === "monthly" ? 1 : 12);
+    const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    while (nextDate < todayMid) {
+      nextDate = addMonths(nextDate, period === "monthly" ? 1 : 12);
+    }
     subs.push({
       id: (title.toLowerCase().replace(/\W+/g, "_").slice(0, 40)) || "sub",
       name,
@@ -449,7 +461,7 @@ export function detectSubscriptions(txs) {
       charges: stable.length,
       first_charge: dateKey(stable[0].date),
       last_charge: dateKey(last),
-      next_charge: dateKey(addMonths(last, period === "monthly" ? 1 : 12)),
+      next_charge: dateKey(nextDate),
       merchants: [...new Set(stable.map((t) => t.description))].sort(),
       price_change: detectSubscriptionPriceChange(items),
     });
@@ -675,17 +687,16 @@ export function monthlyExpenseSeriesAll(txs, months = 6) {
   return series;
 }
 
-const RU_SERVICES = new Set([
-  "яндекс плюс", "иви", "okko", "кион", "kion", "кинопоиск", "premier",
-  "амедиатека", "more.tv", "start", "wink", "мегого", "megogo",
-  "сберпрайм", "world class", "звук", "vk музыка", "яндекс go",
+// Зарубежные сервисы — им англоязычное письмо. Все остальные (включая
+// неизвестные и латинские названия вроде Moscow Rus) — русское письмо.
+const FOREIGN_SERVICES = new Set([
+  "netflix", "spotify", "apple music", "apple tv+", "icloud+", "icloud",
+  "youtube premium", "google one", "microsoft 365", "adobe",
+  "canva", "canva pro", "figma", "notion", "telegram premium",
 ]);
 
 function isRuService(name) {
-  const low = String(name).trim().toLowerCase();
-  if (RU_SERVICES.has(low)) return true;
-  // неизвестное имя: кириллица — скорее всего российский сервис
-  return !/[A-Za-z]/.test(low) && /[а-яё]/.test(low);
+  return !FOREIGN_SERVICES.has(String(name).trim().toLowerCase());
 }
 
 export function buildLetter({ name, amount }) {

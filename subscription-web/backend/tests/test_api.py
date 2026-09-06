@@ -133,7 +133,17 @@ def test_generate_letter_world_class_is_ru():
     assert "782" in r.json()["letter"]
 
 
-def test_generate_letter_unknown_latin_defaults_to_english():
+def test_generate_letter_unknown_latin_defaults_to_ru():
+    # по умолчанию — русское письмо: EN только для известных зарубежных брендов
     r = client.post("/api/generate-letter", json={"name": "Steam"})
     assert r.status_code == 200
-    assert "cancel my subscription" in r.json()["letter"]
+    assert "782" in r.json()["letter"]
+
+
+def test_generate_letter_unknown_latin_name_is_ru():
+    # «Moscow Rus» — российский магазин с латинским написанием: русское письмо
+    r = client.post("/api/generate-letter", json={"name": "Moscow Rus", "amount": 394.0})
+    assert r.status_code == 200
+    letter = r.json()["letter"]
+    assert "782" in letter
+    assert "cancel my subscription" not in letter
