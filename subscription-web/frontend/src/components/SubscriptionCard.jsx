@@ -1,4 +1,4 @@
-import { CalendarClock, Repeat, ExternalLink, PackageCheck, TrendingDown, TrendingUp } from "lucide-react";
+import { CalendarClock, Repeat, ExternalLink, PackageCheck, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 
 const fmt = (n) => Math.round(n).toLocaleString("ru-RU");
 
@@ -51,6 +51,15 @@ export default function SubscriptionCard({ sub, onCancel }) {
         </span>
       </div>
 
+      {sub.total_paid > 0 && (
+        <div className="mt-3 flex items-center justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-xs">
+          <span className="flex items-center gap-1.5 text-slate-400">
+            <Wallet size={13} /> Уже отдано за период выписки
+          </span>
+          <span className="font-semibold text-emerald-400">{fmt(sub.total_paid)} ₽</span>
+        </div>
+      )}
+
       {sub.price_change?.hasChange && (
         <div className={`mt-3 rounded-xl border px-3 py-2.5 text-xs ${
           sub.price_change.direction === "up"
@@ -75,19 +84,28 @@ export default function SubscriptionCard({ sub, onCancel }) {
         </div>
       )}
 
-      <div className="mt-3 flex items-center justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-xs">
-        <span className="flex items-center gap-1.5 text-slate-400">
-          <CalendarClock size={13} /> Следующее списание
-        </span>
-        <span className="text-slate-300">
-          {fmtDate(sub.next_charge)}
-          {days >= 0 && (
-            <span className={days <= 3 ? "ml-2 text-amber-400" : "ml-2 text-emerald-400"}>
-              ({days} дн.)
-            </span>
-          )}
-        </span>
-      </div>
+      {sub.active === false ? (
+        <div className="mt-3 flex items-center justify-between rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs">
+          <span className="flex items-center gap-1.5 text-amber-400">
+            <CalendarClock size={13} /> Списаний нет с {fmtDate(sub.last_charge)}
+          </span>
+          <span className="text-slate-400">похоже, уже отменена</span>
+        </div>
+      ) : (
+        <div className="mt-3 flex items-center justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-xs">
+          <span className="flex items-center gap-1.5 text-slate-400">
+            <CalendarClock size={13} /> Следующее списание
+          </span>
+          <span className="text-slate-300">
+            {fmtDate(sub.next_charge)}
+            {days >= 0 && (
+              <span className={days <= 3 ? "ml-2 text-amber-400" : "ml-2 text-emerald-400"}>
+                ({days} дн.)
+              </span>
+            )}
+          </span>
+        </div>
+      )}
 
       <div className="mt-4 flex items-center gap-3">
         <button

@@ -112,9 +112,9 @@ def test_parse_money_strict_signed():
     assert _parse_money("+1 200,00 руб.", True) == ("+", 1200.0)
 
 
-def test_parse_money_strict_requires_sign():
-    # строгий режим не берёт беззнаковые суммы
-    assert _parse_money("599.0 RUB", True) == ("", None)
+def test_parse_money_strict_accepts_currency():
+    # строгий режим: валюта — достаточный признак суммы
+    assert _parse_money("599.0 RUB", True) == ("", 599.0)
 
 
 def test_parse_money_loose_unsigned_with_currency():
@@ -137,8 +137,11 @@ def test_pdf_lines_multiline_sber_format():
         "Баланс на конец периода 50 000,00 ₽",  # шум: не должен стать транзакцией
     ]
     txs = _transactions_from_lines(lines)
-    assert txs == [{"date": date(2026, 8, 5), "amount": 599.0,
-                    "description": "NETFLIX.COM 866-579-7172 US"}]
+    # мерчант чистится: телефон и страна убираются чистильщиком описаний
+    assert len(txs) == 1
+    assert txs[0]["date"] == date(2026, 8, 5)
+    assert txs[0]["amount"] == 599.0
+    assert txs[0]["description"].startswith("NETFLIX.COM")
 
 
 def test_pdf_lines_single_line_format():

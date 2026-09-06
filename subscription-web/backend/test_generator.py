@@ -66,19 +66,29 @@ def generate_test_csv():
     today = date.today()
     rows = []
 
-    # Подписки из SERVICES: лёгкий jitter суммы + редкие пропуски месяца,
-    # чтобы график был слегка «волнистым», а экономия чуть менялась.
+    # Подписки из SERVICES: лёгкий jitter суммы + редкие пропуски месяца.
+    # Сервис-триплет (одинаковая сумма и день) даёт ОДНО списание в месяц
+    # с ротацией написаний — как в реальной выписке: у сервиса много вариантов
+    # названия мерчанта, но списание раз в месяц, а не три.
+    from collections import defaultdict
+    service_groups = defaultdict(list)
     for base_amount, day_n, name in SERVICES:
+        service_groups[(base_amount, day_n)].append(name)
+
+    for (base_amount, day_n), names in service_groups.items():
+        names = sorted(names)
         for i in range(6, -1, -1):
             d = _add_months(today.replace(day=min(day_n, 28)), -i)
             d = d + timedelta(days=rng.randint(-2, 2))
             if (d - today).days > 0:
                 d = d - timedelta(days=rng.randint(25, 31))
-            # ~18% месяцев пропускаем списание (сервис «выпал» на месяц)
-            if rng.random() < 0.18:
+            # ~12% месяцев пропускаем списание (сервис «выпал» на месяц)
+            if rng.random() < 0.12:
                 continue
-            # jitter: -15% .. +15% от базовой суммы, чтобы график был «волнистым»
-            jitter = base_amount * rng.uniform(0.85, 1.15)
+            # написание мерчанта ротируется от месяца к месяцу
+            name = names[i % len(names)]
+            # jitter: -10% .. +10% от базовой суммы
+            jitter = base_amount * rng.uniform(0.9, 1.1)
             rows.append((d, name, -round(abs(jitter), 2), "Subscription"))
 
     # Шум

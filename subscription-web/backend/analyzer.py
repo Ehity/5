@@ -72,6 +72,15 @@ BRAND_RULES = [
      ["FIGMA"]),
     ("Notion", "ПО", "🗂️",
      ["NOTION"]),
+    ("Boosty", "Подписки на авторов", "🚀", ["BOOSTY"]),
+    ("Ozon Premium", "Экосистема", "🔵", ["OZON PREMIUM", "ОЗОН ПРЕМИУМ"]),
+    ("Литрес", "Книги", "📚", ["LITRES", "ЛИТРЕС"]),
+    ("МТС Premium", "Экосистема", "🔴", ["MTS PREMIUM", "МТС ПРЕМИУМ"]),
+    ("ChatGPT", "ИИ", "🤖", ["OPENAI", "CHATGPT"]),
+    ("Т-Банк Pro", "Банк", "🟡", ["ТБАНК PRO", "TINKOFF PRO", "T-BANK PRO"]),
+    ("Обслуживание карты", "Банк", "🏦",
+     ["ПЛАТА ЗА ОБСЛУЖИВАНИЕ", "ЗА ОБСЛУЖИВАНИЕ КАРТ",
+      "КОМИССИЯ ЗА ОБСЛУЖИВАНИЕ", "ЕЖЕМЕСЯЧНАЯ ПЛАТА"]),
 ]
 
 
@@ -90,12 +99,75 @@ def canonical_name(description: str) -> tuple[str, str, str] | None:
     return None
 
 
+# Обвязка банка вокруг названия мерчанта: глаголы, город и страна, коды
+# терминалов, реквизиты банка. Всё это мешает узнать сервис и склеить его
+# разные написания в одну подписку.
+_BANK_TAIL_RE = re.compile(
+    r"\s*\d{0,2}\s*в ГУ Банка России.*$|\s*АО\s*«?Т[- ]?Банк»?.*$|"
+    r"\s*универсальная лицензи.*$|\s*СЧЕТ КОРРЕСПОНДЕНТА.*$|\s*Без НДС.*$",
+    re.IGNORECASE,
+)
+_PAY_VERB_RE = re.compile(
+    r"^(?:оплата услуг|оплата в|оплата|платеж|платёж|покупка|списание|перевод в|payment|purchase)\s+",
+    re.IGNORECASE,
+)
+# «YANDEX*5815*PLUS» — между звёздочками MCC-код торговой точки
+_STAR_MCC_RE = re.compile(r"\b([A-Z]{2,12})\*(\d{4})\*([A-Z0-9. _-]{2,30})", re.IGNORECASE)
+_WALLET_PREFIX_RE = re.compile(r"\b(?:YM|WB|SBP|QR)\*", re.IGNORECASE)
+_CITY_TAIL_RE = re.compile(
+    r"\s+[A-Za-zА-Яа-яЁё?'’-]{3,20}\s+(?:RUS|RU|US)\b.*$|\s+(?:RUS|RU|US)\b.*$",
+    re.IGNORECASE,
+)
+_TERMINAL_SUFFIX_RE = re.compile(
+    r"[_.\s]+(?:P[_ ]?QR|QR|SBP|PP[_ ]?CARD|CARD|SHOP|MARKET)\s*$", re.IGNORECASE)
+_PHONE_TAIL_RE = re.compile(r"\s*\+?\d[\d ()-]{8,}\d\s*")
+_TERMINAL_PREFIX_RE = re.compile(r"^(?=[A-Z0-9]{2,5}\s)(?=[A-Z0-9]*\d)[A-Z0-9]{2,5}\s+", re.IGNORECASE)
+
+
+def clean_merchant(desc: str) -> tuple[str, str]:
+    """Описание операции → (название сервиса, MCC).
+
+    Убирает «Оплата в», город, страну, коды терминалов и реквизиты банка,
+    чтобы одинаковые сервисы в разных написаниях попали в одну группу.
+    """
+    s = _BANK_TAIL_RE.sub("", str(desc or "")).strip()
+    s = _PAY_VERB_RE.sub("", s)
+    mcc = ""
+    star = _STAR_MCC_RE.search(s)
+    if star:
+        mcc = star.group(2)
+        s = _STAR_MCC_RE.sub(r"\1 \3", s)
+    s = _WALLET_PREFIX_RE.sub("", s)
+    s = _PHONE_TAIL_RE.sub(" ", s)
+    s = _CITY_TAIL_RE.sub("", s)
+    s = _TERMINAL_SUFFIX_RE.sub("", s)
+    s = _TERMINAL_PREFIX_RE.sub("", s)
+    s = re.sub(r"\s+\d{3,6}\s*$", "", s)
+    s = re.sub(r"\s+", " ", s).strip(" .,·—–-")
+    return s, mcc
+
+
+# Кириллица → латиница: «ПЯТЕРОЧКА» и «PYATEROCHKA» должны попасть в одну
+# группу, иначе один и тот же сервис двоится в отчёте.
+_TRANSLIT = {
+    "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Е": "E", "Ё": "E",
+    "Ж": "ZH", "З": "Z", "И": "I", "Й": "I", "К": "K", "Л": "L", "М": "M",
+    "Н": "N", "О": "O", "П": "P", "Р": "R", "С": "S", "Т": "T", "У": "U",
+    "Ф": "F", "Х": "H", "Ц": "TS", "Ч": "CH", "Ш": "SH", "Щ": "SCH",
+    "Ъ": "", "Ы": "Y", "Ь": "", "Э": "E", "Ю": "YU", "Я": "YA",
+}
+
+
+def translit(s: str) -> str:
+    return "".join(_TRANSLIT.get(c, c) for c in str(s).upper())
+
+
 def normalize_description(desc: str) -> str:
-    s = str(desc).upper()
-    s = re.sub(r"HTTPS?://\\S+|WWW\\.\\S+", " ", s)
-    s = re.sub(r"\\S*\\d\\S*", " ", s)            # убираем всё с цифрами
-    s = re.sub(r"\\.[\u0410-\u042f\u0401]{2,3}\\b", " ", s)  # домены
-    s = re.sub(r"[^A-Z\u0410-\u042f\u0401 ]+", " ", s)
+    # транслитерация: «ПЯТЕРОЧКА» и «PYATEROCHKA» — один и тот же магазин
+    s = translit(desc)
+    s = re.sub(r"HTTPS?://\S+|WWW\.\S+", " ", s)
+    s = re.sub(r"\S*\d\S*", " ", s)            # убираем всё с цифрами
+    s = re.sub(r"[^A-Z ]+", " ", s)
     tokens = [
         ABBREV_MAP.get(t, t)
         for t in s.split()
@@ -158,7 +230,17 @@ _DATE_IN_CELL_RE = re.compile(r"\d{1,4}[./-]\d{1,2}[./-]\d{2,4}")
 # повторяются регулярно (карта→вклад, переводы СБП, снятие наличных и т.п.)
 _INTERNAL_RE = re.compile(
     r"перевод|банкомат|вклад|наличн|пополнен|списание|сбербанк|стипендия"
-    r"|kartavklad|vklad|sberbank onl|qr[- ]?код",
+    r"|kartavklad|vklad|sberbank onl|qr[- ]?код|покупка по qr"
+    r"|perevod|popolnen|nalich|vnutrenn|vneshn|raspory"
+    r"|тбанк|т-?банк|tbank|универсальн|альфа|alfa|совком|sovcom|втб\b|vtb|райф|raif"
+    r"|прочие|prochie|операци",
+    re.IGNORECASE,
+)
+
+# От описания остался только город или страна — сервиса в нём нет.
+_CITY_ONLY_RE = re.compile(
+    r"^(?:moscow|moskva|chita|ekaterinburg|sankt|peterburg|piter|novosibirsk|kazan|city|town|rus|ru|us)"
+    r"(?:[\s,]+(?:moscow|moskva|chita|ekaterinburg|sankt|peterburg|piter|rus|ru|us))*$",
     re.IGNORECASE,
 )
 
@@ -168,7 +250,7 @@ _UTILITY_RE = re.compile(
     r"жкх|гис жкх|тсж|квартплат|содержан|жиль[яе]|капремонт|капрем|"
     r"водоканал|водоснабж|водоотвед|теплоснабж|теплосеть|энергосбыт|энергосб[у]|"
     r"газпром|межрегионгаз|горгаз|газserv|газserv|еирц|еркц|расч[её]тн|"
-    r"домофон|тко|обращен|вывоз|услуг|услу|uslu|uchrezd|учрежд|жилищ| ip |"
+    r"домофон|тко|обращен|вывоз|услуг|услу|uslu|uchrezd|учрежд|жилищ|"
     r"домоуправл|жэу|жэк|жилсервис|госуслуг|штраф|гибдд|налог|пошлин",
     re.IGNORECASE,
 )
@@ -176,12 +258,15 @@ _UTILITY_RE = re.compile(
 # Покупки в рознице и по QR (даже регулярные и одинаковые) — не подписки.
 # Сюда же — обрывки СБП-описаний с городом (MOSKVA/MOSCOW/Ekaterinburg)
 _RETAIL_RE = re.compile(
-    r"qr|тбанк|т-?банк|t[- ]?банк|tbank|универсальн|альфа|alfa|совком|sovcom|втб|vtb|райф|raif|"
     r"пятер|pyater|красное[ &-]*белое|krasnoe|магнит|magnit|монетк|monetka|"
-    r"fixprice|дикси|dixy|лента|lenta|озон|ozon|wildberries|вайлдберр|аптек|apteka|aptech|"
-    r"starbucks|старбакс|kfc|макдоналдс|mcdonalds|cinemapark|cinema park|бургер|burger|"
-    r"qr[- ]?код|покупк|moskva|moscow|ekaterinburg|перекрест|perekrestok|дэйли|daily|"
-    r"вкусно и точка|vkusnoitochka|столовая|кофейн|coffe|coffee",
+    r"fixprice|дикси|dixy|лента|lenta|озон|ozon|wildberries|вайлдберр|"
+    r"аптек|apteka|aptech|starbucks|старбакс|kfc|макдоналдс|mcdonalds|"
+    r"cinemapark|cinema park|бургер|burger|перекрест|perekrestok|"
+    r"вкусно и точка|vkusnoitochka|столовая|кофейн|coffe|coffee|"
+    r"пицц|pizza|pitstsa|шаурма|shaurma|продукт|produkt|prodmiks|"
+    r"магазин|market|супермаркет|ашан|auchan|вкусвилл|vkusvill|"
+    r"светофор|svetofor|додо|dodo|rostics|ростикс|азс|лукойл|роснефть|"
+    r"gazprom neft|такси|taxi",
     re.IGNORECASE,
 )
 
@@ -308,242 +393,682 @@ def parse_csv(content: bytes) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Строки-заглушки (шапки, итоги, нумерация страниц) — не описания транзакций
 _PDF_SKIP_RE = re.compile(
-    r"продолжение|страниц|сформирова|справк|выписк|счёт|счет|доступн|"
-    r"баланс|всего|итого|период|владелец|операци|статус|реквизит|валюта|назначение|"
+    r"продолжение|страниц|сформирова|справк|выписк|сч[ёе]т\b|доступн|"
+    r"баланс|всего|итого|период|владелец|статус|реквизит|валюта|назначение|"
     r"остаток|номер сч|дата откр|дата закрыт|действителен|расшифровк|"
-    r"расход|поступлен|кэшб|баланс на",
+    r"дата операции|описание операц|категория|сумма в валюте",
     re.IGNORECASE,
 )
 _DATE_RE = re.compile(r"\b(\d{2}[./]\d{2}[./]\d{2,4})\b")
-_TIME_ONLY_RE = re.compile(r"^[\d\s:.]+$")
+_TIME_ONLY_RE = re.compile(r"^[\d\s:.,+−–—-]+$")
 _TIME_IN_DESC_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
 
-# Строгий: обязательны знак и суффикс валюты (формат СберБанк Онлайн)
-_MONEY_STRICT = re.compile(
-    r"(?P<sign>[+−–-])\s*(?P<whole>[\d\u00a0 ]+?)(?:[.,](?P<frac>\d{1,2}))?\s*"
-    r"(?:₽|руб\.?|руб|RUB)",
+_NBSP = "\u00a0"
+_NNBSP = "\u202f"
+_SPACES = " " + _NBSP + _NNBSP
+
+# Сумма: необязательный знак, целая часть (с группами по 3) и копейки.
+_MONEY_SCAN = re.compile(
+    rf"([+\-−–—])?[{_SPACES}]?(\d{{1,3}}(?:[{_SPACES}]\d{{3}})+|\d{{1,9}})"
+    rf"(?:([.,])(\d{{1,2}}))?(?:[{_SPACES}]{{0,2}}(₽|руб\.|руб|rub|р\.))?",
     re.IGNORECASE,
 )
-# Свободный: для выписок, где суммы без знака/суффикса. Исключаем телефоны и даты:
-# подходит число с пробелом-разделителем тысячи ИЛИ со знаком ИЛИ с суффиксом валюты.
-_MONEY_LOOSE = re.compile(
-    r"(?<![0-9.,])(?:(?P<sign>[+−–-])\s*)?(?P<whole>[\d\u00a0 ]{2,})(?:[.,](?P<frac>\d{1,2}))?"
-    r"\s*(?P<curr>₽|руб\.?|руб|RUB)?(?![0-9])",
-    re.IGNORECASE,
-)
+_GROUP_SEP_RE = re.compile(rf"[{_SPACES}]")
 
 
-def _money_matches(s: str, strict: bool) -> list[tuple[str, float, int]]:
-    """Все валидные суммы в строке: [(знак, значение, позиция)]."""
-    out: list[tuple[str, float, int]] = []
-    pattern = _MONEY_STRICT if strict else _MONEY_LOOSE
-    for m in pattern.finditer(s):
-        sign = (m.group("sign") or "").strip()
-        curr = m.group("curr") if "curr" in m.groupdict() and m.group("curr") else ""
-        whole_raw = m.group("whole") or ""
-        whole = whole_raw.replace(" ", "").replace("\u00a0", "")
-        frac = m.group("frac")
+def _mask_non_money(s: str) -> str:
+    """Заменяет пробелами то, что похоже на число, но суммой не является.
+
+    Даты, время, маски карт и номера счетов маскируются с сохранением длины
+    строки, поэтому позиции найденных сумм остаются валидными.
+    """
+    def blank(m: re.Match) -> str:
+        return " " * len(m.group(0))
+
+    s = re.sub(r"\d{1,2}[./]\d{1,2}[./]\d{2,4}", blank, s)   # 05.03.2026
+    s = re.sub(r"\d{1,2}:\d{2}(?::\d{2})?", blank, s)        # 10:04:12
+    s = re.sub(r"\*{2,}\s?\d{2,6}", blank, s)                # **** 1234
+    s = re.sub(r"\+?\d[\d()-]{9,}\d", blank, s)             # телефоны
+    return re.sub(r"\d{10,}", blank, s)                      # номера счетов
+
+
+def _money_matches(s: str, strict: bool = True) -> list[tuple[str, float, int, int]]:
+    """Все суммы в строке: [(знак, значение, начало, конец)].
+
+    `strict` требует явного признака денег (знак, валюта, копейки или
+    разделитель тысяч) — иначе код авторизации превращается в миллионы.
+    """
+    masked = _mask_non_money(s)
+    out: list[tuple[str, float, int, int]] = []
+    pos = 0
+    while pos < len(masked):
+        m = _MONEY_SCAN.search(masked, pos)
+        if not m:
+            break
+        sign_raw, whole_raw, _sep, frac_raw, curr_raw = m.groups()
+        if not whole_raw:
+            pos = m.start() + 1
+            continue
+        num_start = m.start() + m.group(0).index(whole_raw[0])
+        token_start = m.start() + m.group(0).index(sign_raw) if sign_raw else num_start
+        prev = masked[token_start - 1] if token_start else ""
+        after = masked[m.end():m.end() + 1]
+        # число не может продолжать другое число
+        if (prev and prev in "0123456789.,:/") or (after and after in "0123456789:/"):
+            pos = m.start() + 1
+            continue
+        grouped = bool(_GROUP_SEP_RE.search(whole_raw))
+        whole = _GROUP_SEP_RE.sub("", whole_raw)
+        kopecks = bool(frac_raw) and len(frac_raw) == 2
+        sign = (sign_raw or "").strip()
+        if strict and not (sign or curr_raw or kopecks or grouped):
+            pos = m.end() if m.end() > m.start() else m.start() + 1
+            continue
         try:
             value = float(whole)
         except ValueError:
+            pos = m.start() + 1
             continue
-        # свободный режим: отсеиваем телефоны, даты и время; настоящая сумма —
-        # знак, валюта, десятичная дробь или пробел-разделитель между цифрами.
-        # Отдельно: число, начинающее дату (26.06.2026), суммой не является
-        if not strict and not (
-            sign or curr or frac or re.search(r"\d[ \u00a0]\d", whole_raw)
-        ):
+        if frac_raw:
+            value += int(frac_raw) / 10 ** len(frac_raw)
+        pos = m.end() if m.end() > m.start() else m.start() + 1
+        if value >= 100_000_000:  # таких сумм в личной выписке не бывает
             continue
-        if not strict and re.match(
-            r"\d{1,2}[./]\d{1,2}[./]\d{2,4}", s[m.start():].lstrip()
-        ):
-            continue
-        v = value + (int(frac) / 10 ** len(frac) if frac else 0)
-        # 10+ цифр — это номера счетов, коды авторизации и телефоны, не суммы
-        if v >= 1_000_000_000 or len(whole) >= 10:
-            continue
-        out.append((sign, round(v, 2), m.start()))
+        out.append((sign, round(value, 2), token_start, m.end()))
     return out
 
 
-def _parse_money(s: str, strict: bool) -> tuple[str, float | None]:
-    """Возвращает (знак, сумма). Пример: '-599,00 ₽' → ('-', 599.0).
-
-    Перебирает все совпадения: левое может оказаться фрагментом даты
-    ('26.06' в '26.06.2026 ... 7 000,00'), отбраковывается защитой, и нужно
-    взять следующее настоящее — сумму в конце строки.
-    """
+def _parse_money(s: str, strict: bool = True) -> tuple[str, float | None]:
+    """Возвращает (знак, сумма). Пример: '-599,00 ₽' → ('-', 599.0)."""
     matches = _money_matches(s, strict)
     if not matches:
         return "", None
-    sign, value, _ = matches[0]
+    sign, value = matches[0][0], matches[0][1]
     return sign, value
 
 
-_AUTH_CODE_RE = re.compile(r"^\d{4,8}\s*")
+_AUTH_CODE_RE = re.compile(r"^\d{4,8}\b\s*")
 _OP_BY_CARD_RE = re.compile(r"\s*Операция по карте(?:\s*\*{2,}[\dx]+)?\s*$", re.IGNORECASE)
 
 
+# MCC-коды торговых точек, где подписок не бывает: продукты, общепит,
+# аптеки, АЗС, транспорт, розница, медицина, наличные, ЖКХ.
+_NON_SUB_MCC = {
+    "4111", "4112", "4121", "4131", "4784", "4789", "3990",          # транспорт
+    "4829", "6010", "6011", "6012", "6051",                          # переводы и наличные
+    "4900",                                                          # ЖКХ
+    "5300", "5310", "5311", "5331", "5399",                          # универмаги
+    "5411", "5412", "5422", "5441", "5451", "5462", "5499",          # продукты
+    "5541", "5542", "5983",                                          # АЗС
+    "5611", "5621", "5641", "5651", "5661", "5691", "5699",          # одежда и обувь
+    "5200", "5211", "5231", "5251", "5261", "5712", "5719", "5722", "5732",  # дом
+    "5811", "5812", "5813", "5814",                                  # кафе и рестораны
+    "5122", "5292", "5295", "5912", "5977", "7230",                  # аптеки, косметика
+    "8011", "8021", "8031", "8042", "8043", "8049", "8062", "8071", "8099",  # медицина
+}
+
+# Категория операции из выписки Сбера: сюда подписки не попадают.
+_NON_SUB_CATEGORY_RE = re.compile(
+    r"жкх|коммунальн|супермаркет|продукт|ресторан|кафе|фаст[- ]?фуд|транспорт|"
+    r"топлив|азс|такси|аптек|здоровь|красот|одежд|обувь|наличн|перевод|снятие|"
+    r"дом и ремонт|вс[её] для дома|автоуслуг|образован|налог|штраф",
+    re.IGNORECASE,
+)
+
+
 def _clean_desc(desc: str) -> str:
-    """Убирает служебный хвост «Операция по карте ****0490», даты и мусор."""
+    """Чистит описание: служебный хвост, даты, время, код авторизации."""
     desc = _OP_BY_CARD_RE.sub("", desc)
-    desc = _DATE_RE.sub(" ", desc)
-    return re.sub(r"\s+", " ", desc).strip(" -–−.")
+    desc = re.sub(r"\d{1,2}[./]\d{1,2}[./]\d{2,4}", " ", desc)
+    desc = re.sub(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", " ", desc)
+    desc = re.sub(r"\s+", " ", desc).strip()
+    desc = _AUTH_CODE_RE.sub("", desc, count=1)
+    return desc.strip(" -–−.,\u00a0")
+
+
+# ---------------------------------------------------------------------------
+# Колоночный разбор табличных выписок (Совкомбанк и т.п.)
+#
+# Построчные регулярки не справляются с таблицей: соседние колонки склеиваются
+# («40817810550223167389» + «0.00» → одно число), а назначение платежа лежит
+# на отдельных строках выше и ниже строки с датой. Поэтому колонки ищем по
+# заголовку таблицы и раскладываем текст по ним геометрически.
+# ---------------------------------------------------------------------------
+
+# Роли колонок по тексту заголовка. Порядок важен: сначала точные, потом общие.
+_COLUMN_ROLES = [
+    ("date", re.compile(r"дата|дат[аы]\s*,?\s*врем", re.I)),
+    ("balance", re.compile(r"остаток|баланс|входящ|исходящ", re.I)),
+    ("debit", re.compile(r"дебет|расход|списан|уменьшен|снят", re.I)),
+    ("credit", re.compile(r"кредит|приход|поступлен|зачислен|увеличен|пополнен", re.I)),
+    ("amount", re.compile(r"сумма|amount", re.I)),
+    ("category", re.compile(r"категор", re.I)),
+    ("description", re.compile(r"назначен|описан|получател|детал|коммент|контрагент|мерчант", re.I)),
+    ("account", re.compile(r"^сч[ёе]т", re.I)),
+]
+
+def parse_cell_number(text: str) -> float | None:
+    """Число из ячейки: «1,000.00», «5 480,00», «641.00» → float."""
+    s = re.sub(r"[\s  ₽]|руб\.?|RUB", "", str(text), flags=re.I)
+    if not re.fullmatch(r"[+\-−–—]?[\d.,]*\d", s):
+        return None
+    sign = -1 if s[0] in "-−–—" else 1
+    body = s.lstrip("+-−–—")
+    last_sep = max(body.rfind("."), body.rfind(","))
+    whole, frac = body, ""
+    # разделитель считается десятичным, только если после него 1–2 цифры
+    if last_sep >= 0 and 1 <= len(body) - last_sep - 1 <= 2:
+        whole, frac = body[:last_sep], body[last_sep + 1:]
+    whole = whole.replace(".", "").replace(",", "")
+    if not whole and not frac:
+        return None
+    value = int(whole or 0) + (int(frac) / 10 ** len(frac) if frac else 0)
+    return sign * round(value, 2)
+
+
+def _group_items_into_lines(items: list[dict]) -> list[list[dict]]:
+    """Элементы страницы -> визуальные строки (по координате Y)."""
+    lines: list[list[dict]] = []
+    cur: list[dict] = []
+    cur_y = None
+    for it in sorted(items, key=lambda i: (-i["y"], i["x"])):
+        tol = max(2.0, it.get("h", 10) * 0.5)
+        if cur_y is not None and abs(it["y"] - cur_y) > tol:
+            if cur:
+                lines.append(sorted(cur, key=lambda i: i["x"]))
+            cur = []
+        cur.append(it)
+        cur_y = it["y"]
+    if cur:
+        lines.append(sorted(cur, key=lambda i: i["x"]))
+    return lines
+
+
+_DATE_CELL_RE = re.compile(r"^\s*(\d{2}[./]\d{2}[./]\d{2,4})")
+_DATE_TOKEN_RE = re.compile(r"^\d{1,2}[./]\d{1,2}[./]\d{2,4}$")
+
+
+def _role_of(title: str) -> str | None:
+    for role, pattern in _COLUMN_ROLES:
+        if pattern.search(title):
+            return role
+    return None
+
+
+def _is_data_line(line: list[dict]) -> bool:
+    """Строка операции: начинается с даты."""
+    return bool(line) and bool(_DATE_TOKEN_RE.match(line[0]["str"].strip()))
+
+
+def _column_bands(data_lines: list[list[dict]], gutter: float = 2.0) -> list[list[float]]:
+    """Полосы колонок по вертикальным просветам в строках операций.
+
+    Заголовок для этого не годится: в одних выписках слова заголовка одной
+    колонки разделены пробелами («Дата и время операции»), в других соседние
+    колонки стоят вплотную («Дата,время» и «Счет»). Данные выровнены всегда.
+    """
+    spans = sorted(
+        (it["x"], it["x"] + it.get("w", 0)) for line in data_lines for it in line
+    )
+    if not spans:
+        return []
+    bands = [[spans[0][0], spans[0][1]]]
+    for a, b in spans[1:]:
+        if a - bands[-1][1] < gutter:
+            bands[-1][1] = max(bands[-1][1], b)
+        else:
+            bands.append([a, b])
+    return bands
+
+
+def _build_columns(header_words, data_lines, header_line) -> list[dict]:
+    """Полосы данных + роли из слов заголовка."""
+    bands = _column_bands(data_lines)
+    if len(bands) < 2:
+        bands = _column_bands([header_line], 10.0)
+
+    titles: list[list[dict]] = [[] for _ in bands]
+    for w in header_words:
+        best, best_val = -1, float("-inf")
+        for i, band in enumerate(bands):
+            ov = min(w["x"] + w.get("w", 0), band[1]) - max(w["x"], band[0])
+            if ov > best_val:
+                best, best_val = i, ov
+        if best >= 0:
+            titles[best].append(w)
+
+    # полоса без слов заголовка — хвост соседней колонки (описание переносится
+    # по строкам и рвёт полосу на куски), приклеиваем её влево
+    merged: list[dict] = []
+    for band, ws in zip(bands, titles):
+        if ws or not merged:
+            merged.append({"band": list(band), "words": ws})
+        else:
+            merged[-1]["band"][1] = band[1]
+    while len(merged) > 1 and not merged[0]["words"]:
+        merged[1]["band"][0] = merged[0]["band"][0]
+        merged.pop(0)
+
+    columns: list[dict] = []
+    for m in merged:
+        words = sorted(m["words"], key=lambda w: (w["x"], -w["y"]))
+        # в одной полосе могут стоять заголовки нескольких колонок, если между
+        # ними нет просвета («Счет» / «Входящий остаток» / «Дебет»). Новую
+        # колонку начинает слово, чья роль отличается от роли текущей группы;
+        # слова одного заголовка стоят вплотную, поэтому нужен и отступ.
+        groups: list[dict] = []
+        for w in words:
+            r = _role_of(w["str"])
+            cur = groups[-1] if groups else None
+            if cur is None or (r and cur["role"] and r != cur["role"] and w["x"] - cur["x"] >= 20):
+                groups.append({"x": w["x"], "role": r, "words": [w]})
+            else:
+                cur["words"].append(w)
+                if not cur["role"]:
+                    cur["role"] = r
+        if not groups:
+            columns.append({"x0": m["band"][0], "x1": m["band"][1], "title": "", "role": None})
+            continue
+        for i, g in enumerate(groups):
+            x0 = m["band"][0] if i == 0 else g["x"]
+            x1 = groups[i + 1]["x"] if i + 1 < len(groups) else m["band"][1]
+            title = " ".join(w["str"] for w in sorted(g["words"], key=lambda w: (-w["y"], w["x"])))
+            columns.append({"x0": x0, "x1": x1, "title": title, "role": _role_of(title)})
+    return sorted(columns, key=lambda c: c["x0"])
+
+
+def _detect_columns(lines: list[list[dict]]) -> list[dict] | None:
+    """Ищет строку-заголовок таблицы и возвращает колонки [{x0, title, role}]."""
+    data_lines = [l for l in lines if _is_data_line(l)]
+    for i, line in enumerate(lines):
+        if _is_data_line(line):
+            continue
+        roles = {r for r in (_role_of(it["str"]) for it in line) if r}
+        if len(roles) < 2 or not roles & {"debit", "credit", "amount", "balance"}:
+            continue
+        # шапка бывает в две-три строки («Дата и время» / «операции»)
+        header_words = list(line)
+        hy, hh = line[0]["y"], line[0].get("h", 10)
+        for j in (i - 2, i - 1, i + 1, i + 2):
+            if j < 0 or j >= len(lines):
+                continue
+            ln = lines[j]
+            if _is_data_line(ln) or abs(ln[0]["y"] - hy) > hh * 2.6:
+                continue
+            if any(re.search(r"\d", it["str"]) for it in ln):
+                continue
+            header_words.extend(ln)
+
+        columns = _build_columns(header_words, data_lines, line)
+        found = {c["role"] for c in columns if c["role"]}
+        if len(found) >= 2 and "date" in found:
+            # низ шапки: вторая строка заголовка не должна попасть в описание
+            header_y = min(w["y"] for w in header_words)
+            for c in columns:
+                c["header_y"] = header_y
+            return columns
+    return None
+
+
+# Одно аккуратное число: «39 000,00», «1,000.00», «-599,00». Такой текст
+# колонкам не принадлежит частично — его нельзя резать по границе.
+_WHOLE_NUMBER_RE = re.compile(rf"^[+\-−–—]?\d{{1,3}}(?:[{_SPACES},.]\d{{3}})*(?:[.,]\d{{1,2}})?$")
+
+
+def _split_wide_item(it: dict, boundaries: list[float]) -> list[dict]:
+    """Делит фрагмент, накрывший несколько колонок, на части с оценкой координат.
+
+    Ширина символа берётся средней по фрагменту — этого достаточно, чтобы
+    отнести каждую часть к своей колонке.
+    """
+    text = it["str"]
+    char_w = it.get("w", 0) / max(1, len(text))
+    pieces = []
+    if re.search(r"\s", text.strip()):
+        # есть пробелы — режем по словам, так точнее всего
+        for m in re.finditer(r"\S+", text):
+            pieces.append({"str": m.group(0), "x": it["x"] + char_w * m.start(),
+                           "w": char_w * len(m.group(0))})
+        return pieces
+    # сплошная склейка («40817810550223167389» + «641.00») — режем по границам
+    frm = 0
+    for b in boundaries:
+        cut = round((b - it["x"]) / char_w) if char_w else 0
+        if frm < cut < len(text):
+            pieces.append({"str": text[frm:cut], "x": it["x"] + char_w * frm,
+                           "w": char_w * (cut - frm)})
+            frm = cut
+    pieces.append({"str": text[frm:], "x": it["x"] + char_w * frm,
+                   "w": char_w * (len(text) - frm)})
+    return pieces
+
+
+def _split_into_cells(line: list[dict], columns: list[dict]) -> list[str]:
+    """Раскладывает элементы строки по колонкам таблицы."""
+    bounds = [
+        (c["x0"], columns[i + 1]["x0"] if i + 1 < len(columns) else float("inf"))
+        for i, c in enumerate(columns)
+    ]
+    cells: list[list[str]] = [[] for _ in columns]
+
+    def best_overlap(x0: float, x1: float) -> int:
+        """Колонка с наибольшим перекрытием: числа, выровненные по правому краю,
+        попадают в свою колонку, даже если начинаются левее её границы."""
+        best, best_val = 0, float("-inf")
+        for c, (lo, hi) in enumerate(bounds):
+            top = max(x1, lo) + 1 if hi == float("inf") else hi
+            ov = min(x1, top) - max(x0, lo)
+            if ov > best_val:
+                best, best_val = c, ov
+        return best
+
+    for it in line:
+        x1 = it["x"] + it.get("w", 0)
+        col = next((i for i, (lo, hi) in enumerate(bounds) if lo <= it["x"] < hi), -1)
+        crosses = col >= 0 and x1 > bounds[col][1]
+        if not crosses or _WHOLE_NUMBER_RE.match(it["str"].strip()) \
+                or not it.get("w") or len(it["str"]) < 2:
+            cells[col if (col >= 0 and not crosses) else best_overlap(it["x"], x1)].append(it["str"])
+            continue
+        inner = [hi for _lo, hi in bounds if it["x"] < hi < x1]
+        for piece in _split_wide_item(it, inner):
+            cells[best_overlap(piece["x"], piece["x"] + piece["w"])].append(piece["str"])
+    return [re.sub(r"\s+", " ", " ".join(parts)).strip() for parts in cells]
+
+
+# Карточная авторизация: «...,<сумма>RUR,<город>,MCC <код>,<терминал>\RU\<город>\<МЕРЧАНТ>\»
+_CARD_AUTH_RE = re.compile(
+    r"([\d.,]+)\s*(?:RUR|RUB|₽)[^\\]{0,80}?MCC\s*(\d{4})[^\\]{0,40}\\[A-Z]{2}\\[^\\]{0,40}\\([^\\]{2,60})\\",
+    re.I,
+)
+# Оплата по СБП: «..., <сумма> RUR, <НАЗВАНИЕ ПОЛУЧАТЕЛЯ>, ИНН ...»
+_SBP_RE = re.compile(r"([\d.,]+)\s*(?:RUR|RUB|₽)\s*,\s*([^,]{2,60}?)\s*(?:,|$)", re.I)
+_MCC_RE = re.compile(r"MCC\s*(\d{4})", re.I)
+
+
+def extract_merchant(desc: str, amount: float | None) -> tuple[str, str]:
+    """Название мерчанта и MCC-код из назначения платежа.
+
+    Если в текст попали соседние операции (назначение в PDF занимает
+    несколько строк), нужную выбираем по совпадению суммы внутри текста.
+    """
+    text = str(desc)
+
+    def pick(pattern, name_group):
+        first = None
+        for m in pattern.finditer(text):
+            hit = (parse_cell_number(m.group(1)), m.group(name_group).strip())
+            if first is None:
+                first = hit
+            if amount is not None and hit[0] is not None and abs(hit[0] - amount) < 0.02:
+                return hit
+        return first
+
+    card = pick(_CARD_AUTH_RE, 3)
+    if card and card[1]:
+        mcc_m = _CARD_AUTH_RE.search(text)
+        return card[1], (mcc_m.group(2) if mcc_m else "")
+    sbp = pick(_SBP_RE, 2)
+    mcc = (_MCC_RE.search(text).group(1) if _MCC_RE.search(text) else "")
+    if sbp and sbp[1] and re.search(r"[A-Za-zА-Яа-яЁё]", sbp[1]):
+        return sbp[1], mcc
+    return "", mcc
+
+
+def _transactions_from_pages(pages: list[list[dict]]) -> list[dict]:
+    """Разбирает страницы как таблицу. [] — если заголовок таблицы не найден."""
+    page_lines = [_group_items_into_lines(items) for items in pages]
+    columns = None
+    for lines in page_lines:
+        if lines:
+            columns = _detect_columns(lines)
+            if columns:
+                break
+    if not columns:
+        return []
+    idx: dict[str, int] = {}
+    for i, c in enumerate(columns):
+        if c["role"] and c["role"] not in idx:
+            idx[c["role"]] = i
+    if "date" not in idx:
+        return []
+
+    # Куда «течёт» назначение платежа. Если между заголовком таблицы и первой
+    # операцией страницы есть строки описания, ячейка выровнена по центру
+    # (Совкомбанк) — строку отдаём ближайшей операции. Если таких строк нет,
+    # описание идёт вниз от своей операции (Т-Банк) — отдаём наверх.
+    page_data, loose_above = [], 0
+    for lines in page_lines:
+        if not lines:
+            continue
+        header = _detect_columns(lines)
+        header_y = header[0]["header_y"] if header else float("inf")
+        rows, loose = [], []
+        for line in lines:
+            cells = _split_into_cells(line, columns)
+            m = _DATE_CELL_RE.match(cells[idx["date"]] or "")
+            desc_cell = cells[idx["description"]] if "description" in idx else ""
+            y = line[0]["y"]
+            if m:
+                rows.append({"y": y, "m": m, "cells": cells,
+                             "desc": [(y, desc_cell)] if desc_cell else []})
+            elif desc_cell and y < header_y and not _PDF_SKIP_RE.search(desc_cell):
+                loose.append((y, desc_cell))
+        if not rows:
+            continue
+        top_row_y = max(r["y"] for r in rows)
+        loose_above += sum(1 for y, _t in loose if y > top_row_y)
+        page_data.append((rows, loose))
+    flows_down = loose_above == 0
+
+    records = []
+    for rows, loose in page_data:
+        for y, text in loose:
+            # описание идёт вниз — годится только операция выше строки
+            candidates = [r for r in rows if not flows_down or r["y"] >= y]
+            if not candidates:
+                continue
+            min(candidates, key=lambda r: abs(r["y"] - y))["desc"].append((y, text))
+        for r in rows:
+            description = re.sub(
+                r"\s+", " ",
+                " ".join(t for _y, t in sorted(r["desc"], key=lambda p: -p[0])),
+            ).strip()
+            cell = lambda role: (r["cells"][idx[role]] if role in idx else "")  # noqa: E731
+            num = lambda role: (parse_cell_number(cell(role)) if role in idx else None)  # noqa: E731
+            records.append({
+                "date": _parse_date(r["m"].group(1)),
+                "debit": num("debit"),
+                "credit": num("credit"),
+                "amount": num("amount"),
+                "balance": num("balance"),
+                "has_debit_credit": "debit" in idx or "credit" in idx,
+                "description": description,
+                "category": cell("category"),
+            })
+
+    # Направление операции: колонки дебет/кредит, иначе знак, иначе остаток.
+    txs: list[dict] = []
+    prev_balance = None
+    # в выписке проставлены минусы — значит плюс однозначно означает поступление
+    signed_amounts = any(r["amount"] is not None and r["amount"] < 0 for r in records)
+    for r in records:
+        if not r["date"]:
+            continue
+        value = None
+        if r["has_debit_credit"]:
+            if r["debit"]:
+                value = abs(r["debit"])
+        elif r["amount"]:
+            debit = r["amount"] < 0 or not signed_amounts
+            if not signed_amounts and r["balance"] is not None and prev_balance is not None:
+                delta = round(r["balance"] - prev_balance, 2)
+                if abs(delta - abs(r["amount"])) < 0.02:
+                    debit = False
+            if debit:
+                value = abs(r["amount"])
+        if r["balance"] is not None:
+            prev_balance = r["balance"]
+        if not value:
+            continue
+        merchant, mcc = extract_merchant(r["description"], value)
+        raw = merchant or _clean_desc(r["description"]) or _clean_desc(r["category"])
+        desc, cleaned_mcc = clean_merchant(raw)
+        if not desc:
+            continue
+        txs.append({"date": r["date"], "amount": value, "description": desc[:200],
+                    "category": r["category"][:60], "mcc": mcc or cleaned_mcc})
+    return sorted(txs, key=lambda t: t["date"])
 
 
 def parse_pdf(content: bytes) -> list[dict]:
-    """Извлекает транзакции из текстового PDF-выписки (формат Сбербанк Онлайн)."""
+    """Транзакции из текстового PDF-выписки.
+
+    Сначала пробуем колоночный разбор (табличные выписки Совкомбанка и др.),
+    затем — построчный (Сбербанк Онлайн и простые макеты).
+    """
     import io as _io
 
     import pdfplumber
 
+    pages: list[list[dict]] = []
     lines: list[str] = []
     with pdfplumber.open(_io.BytesIO(content)) as pdf:
         for page in pdf.pages:
+            pages.append([
+                {"str": w["text"], "x": w["x0"], "y": page.height - w["bottom"],
+                 "w": w["x1"] - w["x0"], "h": w["bottom"] - w["top"]}
+                for w in page.extract_words(x_tolerance=1.5)
+            ])
             text = page.extract_text() or ""
             lines.extend(l.strip() for l in text.splitlines() if l.strip())
-    return _transactions_from_lines(lines)
+
+    txs = _transactions_from_pages(pages)
+    return txs if txs else _transactions_from_lines(lines)
+
+
+def _pick_amount(moneys: list[tuple[str, float, int, int]]):
+    """Сумма операции vs остаток по счёту.
+
+    Остаток стоит в строке последним и всегда без знака, поэтому:
+      - если есть суммы со знаком — операция это последняя из них;
+      - иначе при двух и более числах последнее считаем остатком.
+    """
+    if not moneys:
+        return None
+    signed = [m for m in moneys if m[0]]
+    if signed:
+        return signed[-1]
+    if len(moneys) >= 2:
+        return moneys[-2]
+    return moneys[0]
+
+
+def _is_debit_sign(sign: str) -> bool:
+    return bool(sign) and sign in "−–—-"
+
+
+def _line_text(line: str, moneys: list[tuple[str, float, int, int]]) -> str:
+    """Текст строки без найденных сумм (и без дат/времени)."""
+    out = []
+    pos = 0
+    for _sign, _value, start, end in moneys:
+        out.append(line[pos:start])
+        pos = end
+    out.append(line[pos:])
+    return _clean_desc(" ".join(out))
 
 
 def _transactions_from_lines(lines: list[str]) -> list[dict]:
-    """Собирает транзакции из строк выписки.
+    """Собирает операции из строк PDF-выписки.
 
     Поддерживает форматы:
       1) многострочный (Сбер):  '05.08.26 17:04' / '−599,00 ₽' / 'NETFLIX.COM ...'
       2) однострочный:          '05.08.2026  NETFLIX.COM  -599,00 ₽'
-      3) дебетовая карта Сбера: списания без знака, пополнения с '+', описание
-         операции идёт следующей строкой (дата + код авторизации + текст)
+      3) реальная выписка СберБанк Онлайн: 'дата | категория | сумма | остаток',
+         а мерчант, время и код авторизации — следующей строкой
     """
-    has_currency = any(("₽" in l or "руб" in l or "RUB" in l) for l in lines)
-    # строгий режим — только когда в выписке реально есть знак минус в сумме.
+    rows = [l.rstrip() for l in lines if l and l.strip()]
 
-    # беззнаковые суммы (напр. "599.0 RUB") парсятся свободным режимом,
-    # чтобы тестовые PDF-выписки не теряли транзакции вообще.
-    strict = has_currency and any(
-        (s := _parse_money(l, True)[0]) and s in "−–-"
-        for l in lines if not _PDF_SKIP_RE.search(l)
-    )
-
-    signs = [_parse_money(l, strict)[0] for l in lines]
-    saw_minus = any(s and s in "−–-" for s in signs)
-    has_plus = any(s == "+" for s in signs)
-
-    # Правило отбора: минус — точно списание; если в выписке плюсы есть,
-    # а минусов нет (дебетовая карта Сбера), беззнаковые суммы — списания,
-    # а с плюсом — пополнения, их не учитываем.
-    if saw_minus:
-        def _keep(s: str) -> bool:
-            return s in "−–-"
-    elif has_plus:
-        def _keep(s: str) -> bool:
-            return s != "+"
-    else:
-        def _keep(s: str) -> bool:
-            return True
-
-    _AUTH_CODE_RE = re.compile(r"^\d{4,8}\b\s*")
-    _OP_BY_CARD_RE = re.compile(r"Операция по карте [*x\d]+\s*$", re.IGNORECASE)
-
-    txs: list[dict] = []
-    pending: dict | None = None  # {'date': date, 'amount': float|None, 'desc': [str]}
-    last_was_simple = False  # предыдущая строка добавила транзакцию сама (однострочный формат)
+    records: list[dict] = []
+    cur: dict | None = None
 
     def flush() -> None:
-        nonlocal pending
-        if pending and pending["amount"]:
-            desc = re.sub(r"\s+", " ", " ".join(pending["desc"])).strip(" -–−.")
-            desc = _DATE_RE.sub(" ", desc)
-            desc = _TIME_IN_DESC_RE.sub(" ", desc)
-            desc = _clean_desc(re.sub(r"\s+", " ", desc))
-            if desc:
-                txs.append({"date": pending["date"], "amount": pending["amount"],
-                            "description": desc[:120]})
-        pending = None
+        nonlocal cur
+        if cur and cur["amount"] is not None:
+            records.append(cur)
+        cur = None
 
-    def start_tx(d: date, amount: float | None, desc_part: str = "") -> None:
-        nonlocal pending
-        pending = {"date": d, "amount": amount, "desc": []}
-        if desc_part and not _PDF_SKIP_RE.search(desc_part):
-            pending["desc"].append(desc_part)
-
-    for line in lines:
-        m_date = _DATE_RE.search(line)
-        matches = _money_matches(line, strict)
-        sign, amount = (matches[0][0], matches[0][1]) if matches else ("", None)
+    for line in rows:
         is_skip = bool(_PDF_SKIP_RE.search(line))
-        has_money = bool(matches)
+        m_date = _DATE_RE.search(line)
+        moneys = _money_matches(line)
+        text = _line_text(line, moneys)
 
-        if m_date and has_money:
-            # однострочный формат: дата + (описание) + [сумма + остаток]
-            if is_skip:
-                continue
-            flush()
+        if m_date and not is_skip:
             d = _parse_date(m_date.group(1))
-            if not d:
-                continue
-            # в конце строки два числа: предпоследнее — сумма, последнее — остаток
-            sign, amount, m_start = matches[-2] if len(matches) >= 2 else matches[0]
-            desc = (line[:m_date.start()] + " " + line[m_date.end():m_start])
-            desc = _TIME_IN_DESC_RE.sub(" ", desc)
-            desc = _clean_desc(re.sub(r"\s+", " ", desc))
-            keep = _keep(sign)
-            if desc and not _TIME_ONLY_RE.fullmatch(desc):
-                if amount and keep:
-                    txs.append({"date": d, "amount": amount, "description": desc[:120]})
-                    last_was_simple = True
-                else:
-                    last_was_simple = False  # кредитная строка — не приклеивать описание
-            else:
-                # дата + сумма, описание пойдёт следующими строками
-                start_tx(d, amount if (keep and amount) else None)
-                last_was_simple = False
-            continue
-
-        if m_date:
-            # строка с датой без суммы. Два сценария склейки:
-            #   a) описание предыдущей однострочной операции (дата + код + текст);
-            #   b) продолжение pending, у которого уже есть сумма, но нет описания
-            #      (дата + категория + сумма, описание следующей строкой).
-            rest = line[m_date.end():].strip()
-            rest_clean = _clean_desc(_AUTH_CODE_RE.sub("", rest, count=1))
-
-            # ВАЖНО: здесь не проверяем is_skip — в этом формате каждая строка
-            # описания содержит «Операция по карте», а skip-слова («операци»)
-            # предназначены только для отсева шапок при создании новой транзакции
-            if txs and last_was_simple and pending is None and rest_clean:
-                txs[-1]["description"] = rest_clean[:120]
-                last_was_simple = False
-                continue
-            if pending is not None and pending["amount"] is not None and not pending["desc"]:
-                if rest_clean:
-                    pending["desc"].append(rest_clean)
-                last_was_simple = False
+            if d:
+                flush()
+                chosen = _pick_amount(moneys)
+                cur = {
+                    "date": d,
+                    "amount": chosen[1] if chosen else None,
+                    "sign": chosen[0] if chosen else "",
+                    "balance": moneys[-1][1] if len(moneys) >= 2 else None,
+                    "category": text if text and not _TIME_ONLY_RE.fullmatch(text) else "",
+                    "desc": [],
+                }
                 continue
 
-            # иначе — новая транзакция начинается (дата/время на отдельной строке)
-            flush()
-            last_was_simple = False
-            d = _parse_date(m_date.group(1))
-            if d and not is_skip:
-                start_tx(d, None, rest if not _TIME_ONLY_RE.fullmatch(rest) else "")
+        if cur is None:
             continue
 
-        if has_money:
-            # строка суммы текущей транзакции (или итог/баланс внизу)
-            if pending is not None and not is_skip:
-                pending["amount"] = amount if (_keep(sign) and amount) else None
-            last_was_simple = False
-            continue
-
-        # обычная строка: продолжение описания или шапка/шум
-        if pending is not None and not is_skip and not _TIME_ONLY_RE.fullmatch(line):
-            pending["desc"].append(line)
-        last_was_simple = False
+        if moneys and cur["amount"] is None:
+            chosen = _pick_amount(moneys)
+            cur["amount"] = chosen[1]
+            cur["sign"] = chosen[0]
+            if len(moneys) >= 2:
+                cur["balance"] = moneys[-1][1]
+        if text and not is_skip and not _TIME_ONLY_RE.fullmatch(text):
+            cur["desc"].append(text)
 
     flush()
 
-    result = sorted(txs, key=lambda t: t["date"])
-    return result
+    # Направление операции: по знаку, иначе — по изменению остатка по счёту.
+    txs: list[dict] = []
+    prev_balance: float | None = None
+    for r in records:
+        debit = True
+        if r["sign"]:
+            debit = _is_debit_sign(r["sign"])
+        elif r["balance"] is not None and prev_balance is not None:
+            delta = round(r["balance"] - prev_balance, 2)
+            if abs(delta + r["amount"]) < 0.02:
+                debit = True
+            elif abs(delta - r["amount"]) < 0.02:
+                debit = False
+        if r["balance"] is not None:
+            prev_balance = r["balance"]
+        if not debit or not r["amount"]:
+            continue
+        # описание: мерчант со строк-продолжений важнее названия категории
+        merchant = _clean_desc(" ".join(r["desc"]))
+        raw = merchant or r["category"]
+        if not raw:
+            continue
+        description, mcc = clean_merchant(raw)
+        if not description:
+            continue
+        txs.append({
+            "date": r["date"],
+            "amount": r["amount"],
+            "description": description[:120],
+            "category": (r["category"] if merchant else "")[:60],
+            "mcc": mcc,
+        })
+
+    return sorted(txs, key=lambda t: t["date"])
+
 
 def _add_months(d: date, months: int) -> date:
     m = d.month - 1 + months
@@ -554,16 +1079,21 @@ def _add_months(d: date, months: int) -> date:
     return date(year, month, day)
 
 
-def _dice(a: str, b: str) -> float:
-    """Dice-коэффициент по биграммам — примитивная «эмбеддинг»-близость имён."""
-    a = a.lower().replace("_", " ").replace(".", " ").replace("*", " ").split()
-    b = b.lower().replace("_", " ").replace(".", " ").replace("*", " ").split()
-    sa = set("".join(a))
-    sb = set("".join(b))
-    if not sa or not sb:
-        return 0.0
-    return 2.0 * len(sa & sb) / (len(sa) + len(sb))
+def _bigrams(s: str) -> set[str]:
+    t = re.sub(r"[^A-Z0-9]", "", translit(s))
+    return {t[i:i + 2] for i in range(len(t) - 1)}
 
+
+def _dice(a: str, b: str) -> float:
+    """Сходство названий по Дайсу на биграммах.
+
+    Так «YANDEX PLUS» и «YANDEX PLUS RU» — один сервис, а «KARAVAN» и
+    «NAVARAK» — разные (сравнение по множествам символов их путало).
+    """
+    A, B = _bigrams(a), _bigrams(b)
+    if not A or not B:
+        return 0.0
+    return 2 * len(A & B) / (len(A) + len(B))
 
 def _canonical_group_key(desc: str) -> tuple:
     """Ключ группы: известный бренд либо нормализованное имя.
@@ -578,37 +1108,62 @@ def _canonical_group_key(desc: str) -> tuple:
     return ("norm", norm)
 
 
-def _stable_charges(items: list[dict], tol: float = 0.15) -> tuple[list[dict], float]:
+_PRICE_TOLERANCE = 0.05  # допуск, при котором цена считается той же
+
+# Ритм списаний: (период, минимальный интервал, максимальный интервал в днях)
+_PERIOD_WINDOWS = [
+    ("monthly", 20, 40), ("quarterly", 80, 100),
+    ("semiannual", 170, 200), ("annual", 330, 400),
+]
+_PERIOD_MONTHS = {"monthly": 1, "quarterly": 3, "semiannual": 6, "annual": 12}
+_PERIOD_RU = {"monthly": "ежемесячно", "quarterly": "раз в 3 месяца",
+              "semiannual": "раз в полгода", "annual": "ежегодно"}
+
+
+def _stable_charges(items: list[dict], min_events: int = 2) -> tuple[list[dict], float]:
     """Отбирает списания со стабильной ценой: (списания, актуальная цена).
 
-    Суммы кластеризуются с допуском ±15%, так что переживается смена цены
-    (первые месяцы по 99 ₽, дальше полные 300 ₽): ценовой уровень участвует,
-    если в нём ≥2 списания ИЛИ это самый свежий уровень. Актуальная цена —
-    медиана кластера, к которому относится последнее по дате списание.
+    У настоящей подписки списания одинаковые. Разовые покупки в одном и том
+    же магазине дают россыпь разных сумм — по ним подписку не объявляем.
+    Основная цена — самый многочисленный кластер; если последнее списание
+    прошло по другой цене, оно тоже учитывается (цена выросла).
     """
     by_amount = sorted(items, key=lambda t: t["amount"])
-    clusters: list[list[dict]] = [[by_amount[0]]]
-    for t in by_amount[1:]:
-        base = clusters[-1][len(clusters[-1]) // 2]["amount"]
-        if abs(t["amount"] - base) <= abs(base) * tol:
-            clusters[-1].append(t)
-        else:
-            clusters.append([t])
+    clusters: list[list[dict]] = []
+    for t in by_amount:
+        if clusters:
+            base = clusters[-1][len(clusters[-1]) // 2]["amount"]
+            if abs(t["amount"] - base) <= abs(base) * 0.12:
+                clusters[-1].append(t)
+                continue
+        clusters.append([t])
 
     newest = max(items, key=lambda t: t["date"])
-    recurring = [c for c in clusters if len(c) >= 2 or newest in c]
-    stable = [t for c in recurring for t in c]
-    if not stable:
+    main: list[dict] | None = None
+    for c in clusters:
+        if main is None or len(c) > len(main) or (len(c) == len(main) and newest in c):
+            main = c
+    if not main or len(main) < min_events:
         return [], 0.0
-    stable.sort(key=lambda t: t["date"])
 
-    current_cluster = next(c for c in recurring if stable[-1] in c)
-    amounts = sorted(abs(t["amount"]) for t in current_cluster)
-    return stable, amounts[len(amounts) // 2]
+    newest_cluster = next((c for c in clusters if newest in c), None)
 
+    def span(c):
+        return min(t["date"] for t in c), max(t["date"] for t in c)
 
-_PRICE_TOLERANCE = 0.05
-
+    main_from, main_to = span(main)
+    chosen = list(main)
+    # смена цены: уровень идёт до или после основного, не вперемешку с ним
+    # (у разовых покупок уровни чередуются во времени — их не берём)
+    for c in clusters:
+        if c is main:
+            continue
+        c_from, c_to = span(c)
+        if (newest in c) or (len(c) >= 2 and (c_to < main_from or c_from > main_to)):
+            chosen += [t for t in c if t not in chosen]
+    chosen.sort(key=lambda t: t["date"])
+    priced = sorted(abs(t["amount"]) for t in (newest_cluster or main))
+    return chosen, priced[len(priced) // 2]
 
 def detect_price_change(items: list[dict]) -> dict:
     """Одно подтверждённое изменение цены за историю подписки.
@@ -685,66 +1240,93 @@ def detect_subscriptions(txs: list[dict]) -> list[dict]:
     # Небольшой «glue» между группами: если норм-имя очень близко к бренду — слить бренд
     for norm_key in list(norm_keys):
         for brand_name, _cat, _icons, _keys in BRAND_RULES:
-            if _dice(norm_key[1], brand_name) >= 0.75:
+            a = re.sub(r"[^A-Z0-9]", "", translit(norm_key[1]))
+            b = re.sub(r"[^A-Z0-9]", "", translit(brand_name))
+            if len(b) >= 4 and (b in a or (len(a) >= 4 and a in b)):
                 groups.setdefault(("brand", brand_name), []).extend(groups.pop(norm_key, []))
                 break
 
     subs = []
     for key, items in groups.items():
+        # ключ группы транслитерирован, поэтому проверяем и сами описания
+        seen: list[str] = []
+        for t in items:
+            if t["description"] not in seen:
+                seen.append(t["description"])
+        sample = str(key[1]) + " " + " ".join(seen[:4])
         # внутренние переводы и вклады — не подписки, даже при регулярности
-        if _INTERNAL_RE.search(str(key[1])):
+        if _INTERNAL_RE.search(sample):
             continue
         # платежи ЖКХ и бюджетных учреждений — регулярные, но не подписки
-        if _UTILITY_RE.search(str(key[1])):
+        if _UTILITY_RE.search(sample):
             continue
         # покупки в рознице и по QR — не подписки, даже если повторяются
-        if _RETAIL_RE.search(str(key[1])):
+        if _RETAIL_RE.search(sample):
+            continue
+        # от описания остался только город или страна — это не название сервиса
+        if _CITY_ONLY_RE.match(str(key[1]).strip()):
+            continue
+        # категория из выписки: ЖКХ, супермаркеты, транспорт и т.п. — не подписки
+        cat_hits = sum(
+            1 for t in items
+            if t.get("category") and _NON_SUB_CATEGORY_RE.search(t["category"])
+        )
+        if cat_hits and cat_hits >= len(items) * 0.6:
+            continue
+        # MCC-код торговой точки: продукты, общепит, аптеки, транспорт — не подписки
+        mcc_hits = sum(1 for t in items if t.get("mcc") in _NON_SUB_MCC)
+        if mcc_hits and mcc_hits >= len(items) * 0.6:
             continue
         min_events = 2 if key[0] == "brand" else 3  # брендовые сервисы достаточны уже с 2 списаниями
         if len(items) < min_events:  # минимум списаний, чтобы отличать подписку от случайных совпадений
             continue
-        stable, price = _stable_charges(items)
+        stable, price = _stable_charges(items, min_events)
         if len(stable) < min_events:
             continue
         stable.sort(key=lambda t: t["date"])
-        gaps = sorted((stable[i + 1]["date"] - stable[i]["date"]).days
-                      for i in range(len(stable) - 1))
-        # списания в один день (разные варианты мерчанта) дают gap 0 и ломают
-        # медиану — отбрасываем их, оставляя «настоящие» интервалы между периодами
-        gaps = [g for g in gaps if g >= 10]
+        # интервалы между списаниями: у подписки они ровные. Частые визиты в
+        # магазин дают короткие интервалы — раньше их отбрасывали, и покупки
+        # выглядели как ежемесячная подписка.
+        gaps = [(stable[i + 1]["date"] - stable[i]["date"]).days
+                for i in range(len(stable) - 1)]
         if not gaps:
             continue
-        med_gap = gaps[len(gaps) // 2]
-
-        if 20 <= med_gap <= 40:
-            period = "monthly"
-        elif 340 <= med_gap <= 390:
-            period = "annual"
-        else:
+        med_gap = sorted(gaps)[len(gaps) // 2]
+        window = next((w for w in _PERIOD_WINDOWS if w[1] <= med_gap <= w[2]), None)
+        if not window:
+            continue
+        period, lo, hi = window
+        # большинство интервалов должно попадать в тот же ритм
+        if sum(1 for g in gaps if lo <= g <= hi) < len(gaps) * 0.6:
             continue
 
         last = stable[-1]["date"]
         price = abs(price)
-        monthly = price if period == "monthly" else price / 12
+        monthly = price / _PERIOD_MONTHS[period]
         title = key[1] if key[0] == "brand" else key[1].title() or "Подписка"
         name, cat, icon = canonical_name(stable[-1]["description"]) or (title, "Прочее", "💳")
         # имя-обрывок («Qr») — не подписка
         if len(name.strip()) < 3:
             continue
         # следующее списание: дата в будущем даже если платежи давно прекратились
-        next_date = _add_months(last, 1 if period == "monthly" else 12)
+        step = _PERIOD_MONTHS[period]
+        next_date = _add_months(last, step)
         while next_date < date.today():
-            next_date = _add_months(next_date, 1 if period == "monthly" else 12)
+            next_date = _add_months(next_date, step)
         subs.append({
             "id": re.sub(r"\W+", "_", title.lower())[:40] or "sub",
             "name": name if key[0] == "brand" else title,
             "category": cat,
             "icon": icon,
             "amount": round(price, 2),
-            "period": "ежемесячно" if period == "monthly" else "ежегодно",
+            "period": _PERIOD_RU[period],
             "monthly_cost": round(monthly, 2),
             "yearly_cost": round(monthly * 12, 2),
             "charges": len(stable),
+            # сколько уже отдано этому сервису за период выписки
+            "total_paid": round(sum(abs(t["amount"]) for t in stable), 2),
+            # списаний давно нет — подписку, похоже, уже отменили
+            "active": (date.today() - last).days <= _PERIOD_MONTHS[period] * 31 * 2,
             "first_charge": stable[0]["date"].isoformat(),
             "last_charge": last.isoformat(),
             "next_charge": next_date.isoformat(),

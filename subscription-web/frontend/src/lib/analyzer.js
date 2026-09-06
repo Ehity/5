@@ -17,8 +17,12 @@ async function getPdfjs() {
   return _pdfjs;
 }
 
-/** Извлекает строки текста из PDF-выписки (координатная сборка строк). */
-export async function extractPdfLines(buf) {
+/**
+ * Извлекает из PDF координаты всех текстовых фрагментов, по странице на массив.
+ * Координаты нужны колоночному разбору: в табличных выписках соседние колонки
+ * склеиваются в один текст, и по одному тексту их уже не разделить.
+ */
+export async function extractPdfPages(buf) {
   let pdf;
   try {
     const pdfjsLib = await getPdfjs();
@@ -29,214 +33,715 @@ export async function extractPdfLines(buf) {
       "Не удалось обработать PDF в этом браузере. Попробуйте обновить iOS/браузер или загрузите CSV-выписку."
     );
   }
-  const lines = [];
+  const pages = [];
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
     const content = await page.getTextContent();
-    const items = content.items
-      .filter((it) => it.str !== undefined)
-      .map((it) => ({ str: it.str, x: it.transform[4], y: Math.round(it.transform[5]) }))
-      .sort((a, b) => b.y - a.y || a.x - b.x);
-    let lastY = null;
-    let line = "";
-    for (const it of items) {
-      if (lastY !== null && Math.abs(it.y - lastY) > 2) {
-        if (line.trim()) lines.push(line.trim());
-        line = "";
-      }
-      if (line && !line.endsWith(" ") && it.str && !it.str.startsWith(" ")) line += " ";
-      line += it.str;
-      lastY = it.y;
-    }
-    if (line.trim()) lines.push(line.trim());
+    pages.push(
+      content.items
+        .filter((it) => typeof it.str === "string" && it.str.trim() !== "")
+        .map((it) => ({
+          str: it.str,
+          x: it.transform[4],
+          y: it.transform[5],
+          w: it.width || 0,
+          h: it.height || Math.abs(it.transform[3]) || 10,
+        }))
+    );
   }
-  return lines.filter((l) => l.trim());
+  return pages;
+}
+
+/** Склеивает элементы одной визуальной строки, ставя пробел по зазору X. */
+function joinLineItems(line) {
+  let out = "";
+  let prevEnd = null;
+  for (const it of line) {
+    // зазор шире примерно четверти кегля — граница слова или колонки
+    if (prevEnd !== null && it.x - prevEnd > (it.h || 10) * 0.22 && !/\s$/.test(out)) out += " ";
+    out += it.str;
+    prevEnd = it.x + (it.w || 0);
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+
+/** Строки текста PDF-выписки — запасной путь, когда таблица не распознана. */
+export async function extractPdfLines(buf) {
+  const pages = await extractPdfPages(buf);
+  return pagesToLines(pages);
+}
+
+export function pagesToLines(pages) {
+  const lines = [];
+  for (const items of pages) {
+    for (const line of groupItemsIntoLines(items)) {
+      const text = joinLineItems(line);
+      if (text) lines.push(text);
+    }
+  }
+  return lines;
 }
 
 // ---------------------------------------------------------------------------
-// Порт PDF-парсера из analyzer.py (_transactions_from_lines)
+// Разбор PDF-выписки: токенайзер сумм + сборка операций из строк
 // ---------------------------------------------------------------------------
-const PDF_SKIP_RE = /продолжение|страниц|сформирова|справк|выписк|сч[её]т|доступн|баланс|всего|итого|период|владелец|операци|статус|реквизит|валюта|назначение|остаток|номер сч|дата откр|дата закрыт|действителен|расшифровк|расход|поступлен|кэшб/i;
-const PDF_DATE_RE = /\b(\d{2}[./]\d{2}[./]\d{2,4})\b/;
-const PDF_TIME_ONLY_RE = /^[\d\s:.]+$/;
-const PDF_TIME_IN_DESC_RE = /\b\d{1,2}:\d{2}(?::\d{2})?\b/;
-const MONEY_STRICT = /(?<sign>[+−–-])\s*(?<whole>[\d\u00a0 ]+?)(?:[.,](?<frac>\d{1,2}))?\s*(?:₽|руб\.?|руб|RUB)/i;
-const MONEY_LOOSE = /(?:(?<sign>[+−–-])\s*)?(?<whole>[\d\u00a0 ]{2,})(?:[.,](?<frac>\d{1,2}))?\s*(?<curr>₽|руб\.?|руб|RUB)?(?![0-9])/i;
 
-export function moneyMatches(s, strict) {
-  const base = strict ? MONEY_STRICT : MONEY_LOOSE;
-  const global = new RegExp(base.source, base.flags + "g");
+// Служебные строки шапки/подвала выписки — не операции.
+const PDF_SKIP_RE = /продолжение|страниц|сформирова|справк|выписк|сч[её]т\b|доступн|баланс|всего|итого|период|владелец|статус|реквизит|валюта|назначение|остаток|номер сч|дата откр|дата закрыт|действителен|расшифровк|дата операции|описание операц|категория|сумма в валюте/i;
+const PDF_DATE_RE = /\b(\d{2}[./]\d{2}[./]\d{2,4})\b/;
+const PDF_TIME_ONLY_RE = /^[\d\s:.,+−–-]+$/;
+const AUTH_CODE_RE = /^\d{4,8}\b\s*/;
+const OP_BY_CARD_RE = /\s*Операция по карте(?:\s*\*{2,}[\dx]+)?\s*$/i;
+
+const NBSP = "\u00a0";
+const NNBSP = "\u202f";
+const SPACES = ` ${NBSP}${NNBSP}`;
+
+/**
+ * Маскирует пробелами всё, что похоже на число, но суммой не является:
+ * даты, время, маски карт, номера счетов и телефонов. Длина строки
+ * сохраняется, поэтому индексы найденных сумм остаются валидными.
+ */
+export function maskNonMoney(s) {
+  const blank = (m) => " ".repeat(m.length);
+  return String(s)
+    .replace(/\d{1,2}[./]\d{1,2}[./]\d{2,4}/g, blank) // 05.03.2026
+    .replace(/\d{1,2}:\d{2}(?::\d{2})?/g, blank) // 10:04:12 — время
+    .replace(/\*{2,}[\s]?\d{2,6}/g, blank) // **** 1234 — маска карты
+    .replace(/\+?\d[\d()-]{9,}\d/g, blank) // телефоны вида +7(999)123-45-67
+    .replace(/\d{10,}/g, blank); // номера счетов и договоров
+}
+
+// Сумма: необязательный знак, целая часть (с группами по 3) и копейки.
+const MONEY_SCAN_RE = new RegExp(
+  `([+\\-−–—])?[${SPACES}]?(\\d{1,3}(?:[${SPACES}]\\d{3})+|\\d{1,9})(?:([.,])(\\d{1,2}))?(?:[${SPACES}]{0,2}(₽|руб\\.|руб|rub|р\\.))?`,
+  "gi"
+);
+
+/**
+ * Находит суммы в строке. `strict` требует явного признака денег
+ * (знак, валюта, копейки или разделитель тысяч) — так номера договоров
+ * и коды авторизации не превращаются в миллионы.
+ */
+export function moneyMatches(s, strict = true) {
+  const src = String(s);
+  const masked = maskNonMoney(src);
   const out = [];
+  MONEY_SCAN_RE.lastIndex = 0;
   let m;
-  while ((m = global.exec(s)) !== null) {
-    // эмуляция lookbehind (?<![0-9.,]): число не может начинаться после цифры/./,/
-    // lookbehind-эмуляция: символ перед ПЕРВОЙ ЦИФРОЙ числа (матч может
-    // начинаться с пробела-разделителя внутри числа)
-    const numStart = m.index + (m[0].length - m[0].replace(/^[  ]+/, "").length);
-    if (numStart > 0 && /[0-9.,]/.test(s[numStart - 1])) continue;
-    const sign = (m.groups.sign || "").trim();
-    const curr = m.groups.curr || "";
-    const wholeRaw = m.groups.whole || "";
-    const whole = wholeRaw.replace(/[\s ]/g, "");
-    const frac = m.groups.frac;
-    const value = parseFloat(whole);
-    if (Number.isNaN(value)) continue;
-    // свободный режим: настоящая сумма — знак, валюта, дробь или пробел-
-    // разделитель между цифрами; телефоны/даты/время отсекаются
-    if (!strict && (!(sign || curr || frac || /\d[  ]\d/.test(wholeRaw)) ||
-        whole.replace(/[  ]/g, "").length < 2)) continue;
-    // число, начинающее дату (26.06.2026), суммой не является
-    if (!strict && /^\d{1,2}[./]\d{1,2}[./]\d{2,4}/.test(s.slice(m.index).replace(/^\s+/, ""))) continue;
-    let amount = value;
-    if (frac) amount += parseInt(frac, 10) / 10 ** frac.length;
-    // 10+ цифр — номера счетов, коды авторизации и телефоны, не суммы
-    if (amount >= 1e9 || whole.length >= 10) continue;
-    out.push({ sign, amount: Math.round(amount * 100) / 100, start: m.index });
+  while ((m = MONEY_SCAN_RE.exec(masked)) !== null) {
+    if (!m[2]) {
+      MONEY_SCAN_RE.lastIndex = m.index + 1;
+      continue;
+    }
+    const [, signRaw, wholeRaw, , fracRaw, currRaw] = m;
+    const numStart = m.index + m[0].indexOf(wholeRaw[0]);
+    // начало токена — знак, если он есть, иначе первая цифра (пробел не в счёт)
+    const tokenStart = signRaw ? m.index + m[0].indexOf(signRaw) : numStart;
+    const prev = masked[tokenStart - 1];
+    // число не может продолжать другое число
+    if (prev && /[\d.,:/]/.test(prev)) {
+      MONEY_SCAN_RE.lastIndex = m.index + 1;
+      continue;
+    }
+    const after = masked.slice(m.index + m[0].length);
+    if (/^[\d:/]/.test(after)) {
+      MONEY_SCAN_RE.lastIndex = m.index + 1;
+      continue;
+    }
+    const grouped = new RegExp(`[${SPACES}]`).test(wholeRaw);
+    const whole = wholeRaw.replace(new RegExp(`[${SPACES}]`, "g"), "");
+    const kopecks = fracRaw && fracRaw.length === 2;
+    const sign = (signRaw || "").trim();
+    // признак настоящей суммы: знак, валюта, копейки или разделитель тысяч
+    if (strict && !(sign || currRaw || kopecks || grouped)) {
+      MONEY_SCAN_RE.lastIndex = m.index + Math.max(1, m[0].length);
+      continue;
+    }
+    let amount = parseInt(whole, 10);
+    if (Number.isNaN(amount)) {
+      MONEY_SCAN_RE.lastIndex = m.index + 1;
+      continue;
+    }
+    if (fracRaw) amount += parseInt(fracRaw, 10) / 10 ** fracRaw.length;
+    if (amount >= 1e8) continue; // такие суммы в личной выписке не встречаются
+    out.push({
+      sign,
+      amount: Math.round(amount * 100) / 100,
+      start: tokenStart,
+      end: m.index + m[0].length,
+      currency: !!currRaw,
+    });
   }
   return out;
 }
 
-function parseMoney(s, strict) {
-  const matches = moneyMatches(s, strict);
-  if (!matches.length) return { sign: "", amount: null };
-  return { sign: matches[0].sign, amount: matches[0].amount };
-}
-
-const AUTH_CODE_RE = /^\d{4,8}\b\s*/;
-const OP_BY_CARD_RE = /\s*Операция по карте(?:\s*\*{2,}[\dx]+)?\s*$/i;
-
-// Движение денег между своими счетами и наличные — не подписки
-const INTERNAL_RE = /перевод|банкомат|вклад|наличн|пополнен|списание|сбербанк|стипендия|kartavklad|vklad|sberbank onl|qr[- ]?код/i;
-
-// Платежи ЖКХ и бюджетных учреждений (в т.ч. транслит из СБП-выписок:
-// USLU = «услуги», UCHREZD = «учреждение») — регулярные, но не подписки
-const UTILITY_RE = /жкх|гис жкх|тсж|квартплат|содержан|жиль[яе]|капремонт|капрем|водоканал|водоснабж|водоотвед|теплоснабж|теплосеть|энергосбыт|энергосб[у]|газпром|межрегионгаз|горгаз|еирц|еркц|расч[её]тн|домофон|тко|обращен|вывоз|услуг|услу|uslu|uchrezd|учрежд|жилищ|домоуправл|жэу|жэк|жилсервис|госуслуг|штраф|гибдд|налог|пошлин| ip /i;
-
-// Покупки в рознице и по QR (даже регулярные и одинаковые) — не подписки
-const RETAIL_RE = /qr|тбанк|т-?банк|t[- ]?банк|tbank|универсальн|альфа|alfa|совком|sovcom|втб|vtb|райф|raif|пятер|pyater|красное[ &-]*белое|krasnoe|магнит|magnit|монетк|monetka|fixprice|дикси|dixy|лента|lenta|озон|ozon|wildberries|вайлдберр|аптек|apteka|aptech|starbucks|старбакс|kfc|макдоналдс|mcdonalds|cinemapark|cinema park|бургер|burger|qr[- ]?код|покупк|moskva|moscow|ekaterinburg|перекрест|perekrestok|вкусно и точка|vkusnoitochka|столовая|кофейн|coffe|coffee/i;
-
-function cleanDesc(desc) {
-  desc = desc.replace(OP_BY_CARD_RE, "");
-  desc = desc.replace(PDF_DATE_RE, " ");
-  return desc.replace(/\s+/g, " ").replace(/^[  −.–-]+|[  −.–-]+$/g, "").trim();
-}
-
 export function parsePdfDateStr(s) {
-  const m = s.match(/^(\d{2})[./](\d{2})[./](\d{2,4})$/);
+  const m = String(s).match(/^(\d{2})[./](\d{2})[./](\d{2,4})$/);
   if (!m) return null;
   const y = m[3].length === 2 ? 2000 + +m[3] : +m[3];
-  return new Date(y, +m[2] - 1, +m[1]);
+  const d = new Date(y, +m[2] - 1, +m[1]);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** Строки PDF-выписки -> [{date, amount, description}] (порт Python-версии). */
+// MCC-коды торговых точек, где подписок не бывает: продукты, общепит,
+// аптеки, АЗС, транспорт, розница, медицина, наличные, ЖКХ.
+const NON_SUB_MCC = new Set([
+  "4111", "4112", "4121", "4131", "4784", "4789", "3990", // транспорт
+  "4829", "6010", "6011", "6012", "6051", // переводы и наличные
+  "4900", // ЖКХ и коммунальные услуги
+  "5300", "5310", "5311", "5331", "5399", // универмаги и товары повседневного спроса
+  "5411", "5412", "5422", "5441", "5451", "5462", "5499", // продукты
+  "5541", "5542", "5983", // АЗС
+  "5651", "5661", "5691", "5699", "5641", "5621", "5611", // одежда и обувь
+  "5712", "5719", "5722", "5732", "5200", "5211", "5231", "5251", "5261", // дом и ремонт
+  "5811", "5812", "5813", "5814", // кафе и рестораны
+  "5912", "5122", "5292", "5295", "5977", "7230", // аптеки, косметика, парикмахерские
+  "8011", "8021", "8031", "8042", "8043", "8049", "8062", "8071", "8099", // медицина
+]);
+
+// Категория операции из выписки Сбера: сюда подписки не попадают.
+const NON_SUB_CATEGORY_RE = /жкх|коммунальн|супермаркет|продукт|ресторан|кафе|фаст[- ]?фуд|транспорт|топлив|азс|такси|аптек|здоровь|красот|одежд|обувь|наличн|перевод|снятие|дом и ремонт|всё для дома|все для дома|автоуслуг|образован|налог|штраф/i;
+
+// От описания остался только город или страна — сервиса в нём нет.
+const CITY_ONLY_RE = /^(?:moscow|moskva|chita|ekaterinburg|sankt|peterburg|piter|novosibirsk|kazan|city|town|rus|ru|us)(?:[\s,]+(?:moscow|moskva|chita|ekaterinburg|sankt|peterburg|piter|rus|ru|us))*$/i;
+
+function cleanDesc(desc) {
+  let s = String(desc).replace(OP_BY_CARD_RE, "");
+  s = s.replace(/\d{1,2}[./]\d{1,2}[./]\d{2,4}/g, " "); // даты
+  s = s.replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, " "); // время
+  s = s.replace(/\s+/g, " ").trim();
+  s = s.replace(AUTH_CODE_RE, ""); // код авторизации в начале
+  return s.replace(new RegExp(`^[${SPACES}−.,–-]+|[${SPACES}−.,–-]+$`, "g"), "").trim();
+}
+
+/** Текст строки без дат и без найденных сумм. */
+function lineText(line, moneys) {
+  let out = "";
+  let pos = 0;
+  for (const mn of moneys) {
+    out += line.slice(pos, mn.start) + " ";
+    pos = mn.end;
+  }
+  out += line.slice(pos);
+  return cleanDesc(out);
+}
+
+/**
+ * Сумма операции vs остаток по счёту.
+ * В выписке остаток стоит последним и всегда без знака, поэтому:
+ *  - если в строке есть суммы со знаком — операция это последняя из них;
+ *  - иначе при двух и более числах последнее считаем остатком.
+ */
+function pickAmount(moneys) {
+  if (!moneys.length) return null;
+  const signed = moneys.filter((m) => m.sign);
+  if (signed.length) return signed[signed.length - 1];
+  if (moneys.length >= 2) return moneys[moneys.length - 2];
+  return moneys[0];
+}
+
+const isDebitSign = (sign) => !!sign && "−–—-".includes(sign);
+
+/** Строки PDF-выписки -> [{date, amount, description, category, balance}]. */
 export function transactionsFromLines(lines) {
-  const hasCurrency = lines.some((l) => /₽|руб|RUB/i.test(l));
-  // шапку («• Расходы - 45 384.88 ₽») не учитываем: её минус включает
-  // строгий режим и обнуляет парсинг беззнаковых списаний
-  // знак строки — знак ПЕРВОГО принятого матча (как в Python), иначе
-  // дефис внутри названия («TK Lenta-165») включает строгий режим
-  const allSigns = lines.filter((l) => !PDF_SKIP_RE.test(l))
-    .map((l) => {
-      const ms = moneyMatches(l, false);
-      return ms.length ? [ms[0].sign] : [];
-    });
-  const strict = hasCurrency && allSigns.some((ss) => ss.some((s) => s && "−–-".includes(s)));
-  const sawMinus = strict && allSigns.some((ss) => ss.some((s) => s && "−–-".includes(s)));
-  const hasPlus = allSigns.some((ss) => ss.includes("+"));
+  const rows = lines.map((l) => String(l).replace(/\s+$/g, "")).filter((l) => l.trim());
 
-  const txs = [];
-  let pending = null;
-
+  const records = [];
+  let cur = null;
   const flush = () => {
-    if (pending && pending.amount !== null) {
-      let desc = pending.desc.join(" ").replace(/\s+/g, " ").trim();
-      desc = desc.replace(/^[ –−.-]+|[ –−.-]+$/g, "");
-      desc = desc.replace(PDF_DATE_RE, " ").replace(PDF_TIME_IN_DESC_RE, " ");
-      desc = cleanDesc(desc);
-      if (desc) txs.push({ date: pending.date, amount: pending.amount, description: desc.slice(0, 120) });
-    }
-    pending = null;
+    if (cur && cur.amount !== null) records.push(cur);
+    cur = null;
   };
 
-  let lastWasSimple = false; // предыдущая строка сама добавила транзакцию
-
-  for (const line of lines) {
-    const mDate = PDF_DATE_RE.exec(line);
-    const matches = moneyMatches(line, strict);
-    const sign = matches[0]?.sign ?? "";
-    const amount = matches[0]?.amount ?? null;
+  for (const line of rows) {
     const isSkip = PDF_SKIP_RE.test(line);
-    const hasMoney = matches.length > 0;
+    const mDate = PDF_DATE_RE.exec(line);
+    const moneys = moneyMatches(line);
+    const text = lineText(line, moneys);
 
-    if (mDate && hasMoney) {
-      // однострочный формат: дата + (описание) + [сумма + остаток]
-      if (isSkip) continue;
-      flush();
+    if (mDate && !isSkip) {
       const d = parsePdfDateStr(mDate[1]);
-      if (!d) continue;
-      // в конце строки два числа: предпоследнее — сумма, последнее — остаток
-      const chosen = matches.length >= 2 ? matches[matches.length - 2] : matches[0];
-      let desc = line.slice(0, mDate.index) + " " + line.slice(mDate.index + mDate[0].length, chosen.start);
-      desc = desc.replace(PDF_TIME_IN_DESC_RE, " ");
-      desc = cleanDesc(desc);
-      const debit = "−–-".includes(chosen.sign);
-      const keep = sawMinus ? debit : hasPlus ? chosen.sign !== "+" : true;
-      if (desc && !PDF_TIME_ONLY_RE.test(desc)) {
-        if (chosen.amount !== null && chosen.amount !== 0 && keep) {
-          txs.push({ date: d, amount: chosen.amount, description: desc.slice(0, 120) });
-          lastWasSimple = true;
-        } else {
-          lastWasSimple = false; // кредитная строка — не приклеивать описание
-        }
-      } else {
-        pending = { date: d, amount: chosen.amount !== null && keep ? chosen.amount : null, desc: [] };
-        lastWasSimple = false;
-      }
-      continue;
-    }
-
-    if (mDate) {
-      // строка с датой без суммы: два сценария склейки (описание предыдущей
-      // однострочной операции либо продолжение pending с известной суммой)
-      const rest = line.slice(mDate.index + mDate[0].length).trim();
-      const restClean = cleanDesc(rest.replace(AUTH_CODE_RE, ""));
-      if (txs && lastWasSimple && pending === null && restClean) {
-        txs[txs.length - 1].description = restClean.slice(0, 120);
-        lastWasSimple = false;
+      if (d) {
+        flush();
+        const chosen = pickAmount(moneys);
+        cur = {
+          date: d,
+          amount: chosen ? chosen.amount : null,
+          sign: chosen ? chosen.sign : "",
+          balance: moneys.length >= 2 ? moneys[moneys.length - 1].amount : null,
+          category: text && !PDF_TIME_ONLY_RE.test(text) ? text : "",
+          descParts: [],
+        };
         continue;
       }
-      if (pending !== null && pending.amount !== null && !pending.desc.length) {
-        if (restClean) pending.desc.push(restClean);
-        lastWasSimple = false;
-        continue;
-      }
-      flush();
-      lastWasSimple = false;
-      const d = parsePdfDateStr(mDate[1]);
-      if (d && !isSkip) {
-        const rest2 = line.slice(mDate.index + mDate[0].length).trim();
-        pending = { date: d, amount: null, desc: [] };
-        if (rest2 && !PDF_SKIP_RE.test(rest2) && !PDF_TIME_ONLY_RE.test(rest2)) pending.desc.push(rest2);
-      }
-      continue;
     }
 
-    if (hasMoney) {
-      if (pending !== null && !isSkip) {
-        const keep = sawMinus ? "−–-".includes(sign) : hasPlus ? sign !== "+" : true;
-        pending.amount = keep && matches[0].amount !== null ? matches[0].amount : null;
-      }
-      lastWasSimple = false;
-      continue;
+    if (!cur) continue;
+
+    // строка-продолжение: мерчант, код авторизации, город
+    if (moneys.length && cur.amount === null) {
+      const chosen = pickAmount(moneys);
+      cur.amount = chosen.amount;
+      cur.sign = chosen.sign;
+      if (moneys.length >= 2) cur.balance = moneys[moneys.length - 1].amount;
+    }
+    if (text && !isSkip && !PDF_TIME_ONLY_RE.test(text)) cur.descParts.push(text);
+  }
+  flush();
+
+  // Направление операции: по знаку, иначе — по изменению остатка по счёту.
+  const txs = [];
+  let prevBalance = null;
+  for (const r of records) {
+    let debit = true;
+    if (r.sign) {
+      debit = isDebitSign(r.sign);
+    } else if (r.balance !== null && prevBalance !== null) {
+      // остаток изменился ровно на сумму операции — направление известно точно
+      const delta = Math.round((r.balance - prevBalance) * 100) / 100;
+      if (Math.abs(delta + r.amount) < 0.02) debit = true;
+      else if (Math.abs(delta - r.amount) < 0.02) debit = false;
+    }
+    if (r.balance !== null) prevBalance = r.balance;
+    if (!debit || !r.amount) continue;
+    // описание: мерчант со строк-продолжений важнее названия категории
+    const merchant = cleanDesc(r.descParts.join(" "));
+    const raw = merchant || r.category;
+    if (!raw) continue;
+    const cleaned = cleanMerchant(raw);
+    if (!cleaned.name) continue;
+    txs.push({
+      date: r.date,
+      amount: r.amount,
+      description: cleaned.name.slice(0, 120),
+      category: (merchant ? r.category : "").slice(0, 60),
+      mcc: cleaned.mcc,
+      raw: raw.slice(0, 200),
+    });
+  }
+  return txs.sort((a, b) => a.date - b.date);
+}
+
+// Движение денег между своими счетами и наличные — не подписки
+const INTERNAL_RE = /перевод|банкомат|вклад|наличн|пополнен|списание|сбербанк|стипендия|kartavklad|vklad|sberbank onl|qr[- ]?код|покупка по qr|perevod|popolnen|nalich|vnutrenn|vneshn|raspory|тбанк|т-?банк|tbank|универсальн|альфа|alfa|совком|sovcom|втб\b|vtb|райф|raif/i;
+// Платежи ЖКХ и бюджетных учреждений (в т.ч. транслит из СБП-выписок:
+// USLU = «услуги», UCHREZD = «учреждение») — регулярные, но не подписки
+const UTILITY_RE = /жкх|гис жкх|тсж|квартплат|содержан|жиль[яе]|капремонт|капрем|водоканал|водоснабж|водоотвед|теплоснабж|теплосеть|энергосбыт|энергосб[у]|газпром|межрегионгаз|горгаз|еирц|еркц|расч[её]тн|домофон|тко|обращен|вывоз|услуг|услу|uslu|uchrezd|учрежд|жилищ|домоуправл|жэу|жэк|жилсервис|госуслуг|штраф|гибдд|налог|пошлин|прочие|prochie|операци/i;
+// Покупки в рознице и по QR (даже регулярные и одинаковые) — не подписки
+const RETAIL_RE = /пятер|pyater|красное[ &-]*белое|krasnoe|магнит|magnit|монетк|monetka|fixprice|дикси|dixy|лента|lenta|озон|ozon|wildberries|вайлдберр|аптек|apteka|aptech|starbucks|старбакс|kfc|макдоналдс|mcdonalds|cinemapark|cinema park|бургер|burger|перекрест|perekrestok|вкусно и точка|vkusnoitochka|столовая|кофейн|coffe|coffee|пицц|pizza|pitstsa|шаурма|shaurma|продукт|produkt|prodmiks|магазин|market|супермаркет|ашан|auchan|вкусвилл|vkusvill|светофор|svetofor|додо|dodo|rostics|ростикс|азс|лукойл|роснефть|gazprom neft|такси|taxi/i;
+
+// ---------------------------------------------------------------------------
+// Колоночный разбор табличных выписок (Совкомбанк, Сбер и т.п.)
+//
+// Строковые регулярки не справляются с таблицами: соседние колонки склеиваются
+// («40817810550223167389» + «0.00» → одно число), а назначение платежа лежит
+// на отдельных строках выше и ниже строки с датой. Поэтому колонки ищем по
+// заголовку таблицы и раскладываем текст по ним геометрически.
+// ---------------------------------------------------------------------------
+
+// Роли колонок по тексту заголовка. Порядок важен: сначала точные, потом общие.
+const COLUMN_ROLES = [
+  ["date", /дата|дат[аы]\s*,?\s*врем/i],
+  ["balance", /остаток|баланс|входящ|исходящ/i],
+  ["debit", /дебет|расход|списан|уменьшен|снят/i],
+  ["credit", /кредит|приход|поступлен|зачислен|увеличен|пополнен/i],
+  ["amount", /сумма|amount/i],
+  ["category", /категор/i],
+  ["description", /назначен|описан|получател|детал|коммент|контрагент|мерчант/i],
+  ["account", /^сч[её]т/i],
+];
+
+function roleOf(title) {
+  for (const [role, re] of COLUMN_ROLES) if (re.test(title)) return role;
+  return null;
+}
+
+/** Разбор одного числа из ячейки: «1,000.00», «5 480,00», «641.00» → число. */
+export function parseCellNumber(text) {
+  const s = String(text).replace(/[\s  ₽]|руб\.?|RUB/gi, "");
+  if (!/^[+\-−–—]?[\d.,]*\d$/.test(s)) return null;
+  const sign = /^[-−–—]/.test(s) ? -1 : 1;
+  const body = s.replace(/^[+\-−–—]/, "");
+  const lastSep = Math.max(body.lastIndexOf("."), body.lastIndexOf(","));
+  let whole = body;
+  let frac = "";
+  // разделитель считается десятичным, только если после него 1–2 цифры
+  if (lastSep >= 0 && body.length - lastSep - 1 <= 2 && body.length - lastSep - 1 >= 1) {
+    whole = body.slice(0, lastSep);
+    frac = body.slice(lastSep + 1);
+  }
+  whole = whole.replace(/[.,]/g, "");
+  if (!whole && !frac) return null;
+  const value = parseInt(whole || "0", 10) + (frac ? parseInt(frac, 10) / 10 ** frac.length : 0);
+  return Number.isNaN(value) ? null : sign * Math.round(value * 100) / 100;
+}
+
+/** Элементы страницы -> визуальные строки (по координате Y). */
+export function groupItemsIntoLines(items) {
+  const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
+  const lines = [];
+  let cur = [];
+  let curY = null;
+  for (const it of sorted) {
+    const tol = Math.max(2, (it.h || 10) * 0.5);
+    if (curY !== null && Math.abs(it.y - curY) > tol) {
+      if (cur.length) lines.push(cur.sort((a, b) => a.x - b.x));
+      cur = [];
+    }
+    cur.push(it);
+    curY = it.y;
+  }
+  if (cur.length) lines.push(cur.sort((a, b) => a.x - b.x));
+  return lines;
+}
+
+const headerLineText = (line) => line.map((i) => i.str).join(" ").replace(/\s+/g, " ").trim();
+const DATE_CELL_RE = /^\s*(\d{2}[./]\d{2}[./]\d{2,4})/;
+const DATE_TOKEN_RE = /^\d{1,2}[./]\d{1,2}[./]\d{2,4}$/;
+
+/** Строка операции: начинается с даты. */
+const isDataLine = (line) => line.length > 0 && DATE_TOKEN_RE.test(line[0].str.trim());
+
+/**
+ * Полосы колонок по вертикальным просветам в строках операций.
+ * Заголовок для этого не годится: в одних выписках слова заголовка одной
+ * колонки разделены пробелами («Дата и время операции»), в других соседние
+ * колонки стоят вплотную («Дата,время» и «Счет»). Данные же выровнены всегда.
+ */
+function columnBandsFromData(dataLines, gutter = 2) {
+  const spans = [];
+  for (const line of dataLines) {
+    for (const it of line) spans.push([it.x, it.x + (it.w || 0)]);
+  }
+  if (!spans.length) return [];
+  spans.sort((a, b) => a[0] - b[0]);
+  const bands = [[spans[0][0], spans[0][1]]];
+  for (const [a, b] of spans.slice(1)) {
+    const last = bands[bands.length - 1];
+    if (a - last[1] < gutter) last[1] = Math.max(last[1], b);
+    else bands.push([a, b]);
+  }
+  return bands;
+}
+
+/** Ищет строку-заголовок таблицы и возвращает колонки [{x0, title, role}]. */
+export function detectColumns(lines) {
+  const dataLines = lines.filter(isDataLine);
+  for (let i = 0; i < lines.length; i++) {
+    if (isDataLine(lines[i])) continue;
+    const roles = new Set();
+    for (const it of lines[i]) {
+      const r = roleOf(it.str);
+      if (r) roles.add(r);
+    }
+    const hasMoneyRole = ["debit", "credit", "amount", "balance"].some((r) => roles.has(r));
+    if (roles.size < 2 || !hasMoneyRole) continue;
+
+    // шапка бывает в две-три строки («Дата и время» / «операции»): берём
+    // соседние строки без дат и без сумм в тех же координатах
+    const headerWords = [...lines[i]];
+    const hy = lines[i][0].y;
+    const hh = lines[i][0].h || 10;
+    for (const j of [i - 2, i - 1, i + 1, i + 2]) {
+      const ln = lines[j];
+      if (!ln || isDataLine(ln)) continue;
+      if (Math.abs(ln[0].y - hy) > hh * 2.6) continue;
+      if (ln.some((it) => /\d/.test(it.str))) continue;
+      headerWords.push(...ln);
     }
 
-    if (pending !== null && !isSkip && !PDF_TIME_ONLY_RE.test(line)) {
-      pending.desc.push(line);
+    const columns = buildColumns(headerWords, dataLines, lines[i]);
+    const roleSet = new Set(columns.map((c) => c.role).filter(Boolean));
+    if (roleSet.size >= 2 && roleSet.has("date")) {
+      // низ шапки: заголовок бывает в две строки, и вторая строка не должна
+      // попасть в описание первой операции
+      const headerY = Math.min(...headerWords.map((w) => w.y));
+      return { columns, headerIndex: i, headerY };
     }
-    lastWasSimple = false;
+  }
+  return null;
+}
+
+/** Полосы данных + роли из слов заголовка. */
+function buildColumns(headerWords, dataLines, headerLine) {
+  let bands = columnBandsFromData(dataLines);
+  if (bands.length < 2) {
+    // операций на странице нет — раскладываем по словам заголовка
+    bands = columnBandsFromData([headerLine], 10);
+  }
+  const overlap = (a, b, band) => Math.min(b, band[1]) - Math.max(a, band[0]);
+  const titles = bands.map(() => []);
+  for (const w of headerWords) {
+    let best = -1;
+    let bestVal = -Infinity;
+    bands.forEach((band, i) => {
+      const ov = overlap(w.x, w.x + (w.w || 0), band);
+      if (ov > bestVal) { bestVal = ov; best = i; }
+    });
+    if (best >= 0) titles[best].push(w);
   }
 
-  flush();
+  // полоса без слов заголовка — это хвост соседней колонки (описание
+  // переносится по строкам и рвёт полосу на куски), приклеиваем влево
+  const merged = [];
+  bands.forEach((band, i) => {
+    if (titles[i].length || !merged.length) merged.push({ band: [...band], words: titles[i] });
+    else merged[merged.length - 1].band[1] = band[1];
+  });
+  // полосы левее первого заголовка приклеиваем вправо
+  while (merged.length > 1 && !merged[0].words.length) {
+    merged[1].band[0] = merged[0].band[0];
+    merged.shift();
+  }
+
+  const columns = [];
+  for (const m of merged) {
+    const words = m.words.sort((a, b) => a.x - b.x || b.y - a.y);
+    // в одной полосе могут стоять заголовки нескольких колонок, если между
+    // ними нет просвета («Счет» / «Входящий остаток» / «Дебет»). Новую
+    // колонку начинает слово, чья роль отличается от роли текущей группы.
+    const groups = [];
+    for (const w of words) {
+      const r = roleOf(w.str);
+      const cur = groups[groups.length - 1];
+      // колонки разнесены по горизонтали: слова одного заголовка стоят вплотную
+      if (!cur || (r && cur.role && r !== cur.role && w.x - cur.x >= 20)) {
+        groups.push({ x: w.x, role: r, words: [w] });
+      } else {
+        cur.words.push(w);
+        if (!cur.role) cur.role = r;
+      }
+    }
+    if (!groups.length) {
+      columns.push({ x0: m.band[0], x1: m.band[1], title: "", role: null });
+      continue;
+    }
+    groups.forEach((g, i) => {
+      const x0 = i === 0 ? m.band[0] : g.x;
+      const x1 = i + 1 < groups.length ? groups[i + 1].x : m.band[1];
+      const title = g.words.sort((a, b) => b.y - a.y || a.x - b.x).map((w) => w.str).join(" ");
+      columns.push({ x0, x1, title, role: roleOf(title) });
+    });
+  }
+  return columns.sort((a, b) => a.x0 - b.x0);
+}
+
+// Одно аккуратное число: «39 000,00», «1,000.00», «-599,00». Такой текст
+// колонкам не принадлежит частично — его нельзя резать по границе.
+const WHOLE_NUMBER_RE = new RegExp(`^[+\\-−–—]?\\d{1,3}(?:[${SPACES},.]\\d{3})*(?:[.,]\\d{1,2})?$`);
+
+/**
+ * Делит текстовый фрагмент, накрывший несколько колонок, на части с оценкой
+ * координат. Ширина символа считается средней по фрагменту — этого хватает,
+ * чтобы отнести каждую часть к своей колонке.
+ */
+function splitWideItem(it, boundaries) {
+  const charW = it.w / Math.max(1, it.str.length);
+  const pieces = [];
+  if (/\s/.test(it.str.trim())) {
+    // есть пробелы — режем по словам, так точнее всего
+    const re = /\S+/g;
+    let m;
+    while ((m = re.exec(it.str)) !== null) {
+      pieces.push({ str: m[0], x: it.x + charW * m.index, w: charW * m[0].length });
+    }
+    return pieces;
+  }
+  // сплошная склейка («40817810550223167389» + «641.00») — режем по границам
+  let from = 0;
+  for (const b of boundaries) {
+    const cut = Math.round((b - it.x) / charW);
+    if (cut > from && cut < it.str.length) {
+      pieces.push({ str: it.str.slice(from, cut), x: it.x + charW * from, w: charW * (cut - from) });
+      from = cut;
+    }
+  }
+  pieces.push({ str: it.str.slice(from), x: it.x + charW * from, w: charW * (it.str.length - from) });
+  return pieces;
+}
+
+function splitIntoCells(line, columns) {
+  const bounds = columns.map((c, i) => [c.x0, i + 1 < columns.length ? columns[i + 1].x0 : Infinity]);
+  const cells = columns.map(() => []);
+  // колонка с наибольшим перекрытием: числа, выровненные по правому краю,
+  // попадают в свою колонку, даже если начинаются левее её границы
+  const bestOverlap = (x0, x1) => {
+    let best = 0;
+    let bestVal = -Infinity;
+    for (let c = 0; c < columns.length; c++) {
+      const hi = bounds[c][1] === Infinity ? Math.max(x1, bounds[c][0]) + 1 : bounds[c][1];
+      const ov = Math.min(x1, hi) - Math.max(x0, bounds[c][0]);
+      if (ov > bestVal) { bestVal = ov; best = c; }
+    }
+    return best;
+  };
+
+  for (const it of line) {
+    const x1 = it.x + (it.w || 0);
+    const col = columns.findIndex((_c, i) => it.x >= bounds[i][0] && it.x < bounds[i][1]);
+    const crosses = col >= 0 && x1 > bounds[col][1];
+    if (!crosses || WHOLE_NUMBER_RE.test(it.str.trim()) || !it.w || it.str.length < 2) {
+      cells[col >= 0 && !crosses ? col : bestOverlap(it.x, x1)].push(it.str);
+      continue;
+    }
+    const inner = bounds.map((b) => b[1]).filter((b) => b > it.x && b < x1);
+    for (const piece of splitWideItem(it, inner)) {
+      cells[bestOverlap(piece.x, piece.x + piece.w)].push(piece.str);
+    }
+  }
+  return cells.map((parts) => parts.join(" ").replace(/\s+/g, " ").trim());
+}
+
+// Карточная авторизация: «...,<сумма>RUR,<город>,MCC <код>,<терминал>\RU\<город>\<МЕРЧАНТ>\»
+const CARD_AUTH_RE = /([\d.,]+)\s*(?:RUR|RUB|₽)[^\\]{0,80}?MCC\s*(\d{4})[^\\]{0,40}\\[A-Z]{2}\\[^\\]{0,40}\\([^\\]{2,60})\\/gi;
+// Оплата по СБП: «..., <сумма> RUR, <НАЗВАНИЕ ПОЛУЧАТЕЛЯ>, ИНН ...»
+const SBP_RE = /([\d.,]+)\s*(?:RUR|RUB|₽)\s*,\s*([^,]{2,60}?)\s*(?:,|$)/gi;
+
+/**
+ * Достаёт из назначения платежа название мерчанта и MCC-код.
+ * Если в текст попали соседние операции (описание в PDF идёт несколькими
+ * строками), нужную выбираем по совпадению суммы внутри текста с суммой операции.
+ */
+export function extractMerchant(desc, amount) {
+  const text = String(desc);
+  const pick = (re, mccIdx, nameIdx) => {
+    re.lastIndex = 0;
+    let m;
+    let first = null;
+    while ((m = re.exec(text)) !== null) {
+      const hit = {
+        amount: parseCellNumber(m[1]),
+        mcc: mccIdx ? m[mccIdx] : "",
+        name: m[nameIdx].trim(),
+      };
+      if (!first) first = hit;
+      if (amount != null && hit.amount != null && Math.abs(hit.amount - amount) < 0.02) return hit;
+    }
+    return first;
+  };
+  const card = pick(CARD_AUTH_RE, 2, 3);
+  if (card && card.name) return { merchant: card.name, mcc: card.mcc };
+  const sbp = pick(SBP_RE, 0, 2);
+  if (sbp && sbp.name && /[A-Za-zА-Яа-яЁё]/.test(sbp.name)) {
+    const mcc = (text.match(/MCC\s*(\d{4})/i) || [])[1] || "";
+    return { merchant: sbp.name, mcc };
+  }
+  return { merchant: "", mcc: (text.match(/MCC\s*(\d{4})/i) || [])[1] || "" };
+}
+
+/**
+ * Разбирает страницы PDF как таблицу. Возвращает [] если заголовок таблицы
+ * не найден — тогда вызывающий код падает на построчный разбор.
+ */
+export function transactionsFromPages(pages) {
+  const all = [];
+  // Заголовок таблицы печатается один раз (обычно на первой странице),
+  // а разметка колонок одинакова для всего документа.
+  const pageLines = pages.map((items) => (items.length ? groupItemsIntoLines(items) : []));
+  let columns = null;
+  for (const lines of pageLines) {
+    const found = detectColumns(lines);
+    if (found) { columns = found.columns; break; }
+  }
+  if (!columns) return [];
+  const idx = {};
+  columns.forEach((c, i) => { if (c.role && idx[c.role] === undefined) idx[c.role] = i; });
+  if (idx.date === undefined) return [];
+
+  // Куда «течёт» назначение платежа. Если между заголовком таблицы и первой
+  // операцией страницы есть строки описания, ячейка выровнена по центру
+  // (Совкомбанк) — тогда строку отдаём ближайшей операции. Если таких строк
+  // нет, описание идёт вниз от своей операции (Т-Банк) — отдаём наверх.
+  const pageData = [];
+  let looseAbove = 0;
+  for (const lines of pageLines) {
+    if (!lines.length) continue;
+    const header = detectColumns(lines);
+    const headerY = header ? header.headerY : Infinity;
+    const rows = [];
+    const loose = []; // строки без даты: продолжение назначения платежа
+    for (const line of lines) {
+      const cells = splitIntoCells(line, columns);
+      const dateCell = cells[idx.date] || "";
+      const m = DATE_CELL_RE.exec(dateCell);
+      const y = line[0].y;
+      const descCell = idx.description !== undefined ? cells[idx.description] : "";
+      if (m) rows.push({ y, m, cells, desc: descCell ? [descCell] : [] });
+      else if (descCell && y < headerY && !PDF_SKIP_RE.test(descCell)) loose.push({ y, text: descCell });
+    }
+    if (!rows.length) continue;
+    const topRowY = Math.max(...rows.map((r) => r.y));
+    looseAbove += loose.filter((l) => l.y > topRowY).length;
+    pageData.push({ rows, loose });
+  }
+  const flowsDown = looseAbove === 0;
+
+  for (const { rows, loose } of pageData) {
+    for (const l of loose) {
+      let best = null;
+      let bestD = Infinity;
+      for (const r of rows) {
+        // описание идёт вниз — годится только операция выше строки
+        if (flowsDown && r.y < l.y) continue;
+        const dist = Math.abs(r.y - l.y);
+        if (dist < bestD) { bestD = dist; best = r; }
+      }
+      if (best) best.desc.push({ y: l.y, text: l.text });
+    }
+    for (const r of rows) {
+      const parts = r.desc.map((p) => (typeof p === "string" ? { y: r.y, text: p } : p));
+      parts.sort((a, b) => b.y - a.y);
+      const description = parts.map((p) => p.text).join(" ").replace(/\s+/g, " ").trim();
+      const cell = (role) => (idx[role] === undefined ? "" : r.cells[idx[role]]);
+      const num = (role) => (idx[role] === undefined ? null : parseCellNumber(cell(role)));
+      all.push({
+        date: parsePdfDateStr(r.m[1]),
+        debit: num("debit"),
+        credit: num("credit"),
+        amount: num("amount"),
+        balance: num("balance"),
+        hasDebitCredit: idx.debit !== undefined || idx.credit !== undefined,
+        description,
+        category: cell("category"),
+      });
+    }
+  }
+
+  // Направление операции: колонки дебет/кредит, иначе знак, иначе остаток.
+  const txs = [];
+  let prevBalance = null;
+  // в выписке проставлены минусы — значит плюс однозначно означает поступление
+  const signedAmounts = all.some((r) => r.amount !== null && r.amount < 0);
+  for (const r of all) {
+    if (!r.date) continue;
+    let value = null;
+    if (r.hasDebitCredit) {
+      if (r.debit) value = Math.abs(r.debit);
+    } else if (r.amount !== null && r.amount !== 0) {
+      let debit = r.amount < 0 || !signedAmounts;
+      if (!signedAmounts && r.balance !== null && prevBalance !== null) {
+        const delta = Math.round((r.balance - prevBalance) * 100) / 100;
+        if (Math.abs(delta - Math.abs(r.amount)) < 0.02) debit = false;
+      }
+      if (debit) value = Math.abs(r.amount);
+    }
+    if (r.balance !== null) prevBalance = r.balance;
+    if (!value) continue;
+    const found = extractMerchant(r.description, value);
+    const cleaned = cleanMerchant(found.merchant || cleanDesc(r.description) || cleanDesc(r.category));
+    const desc = cleaned.name;
+    const mcc = found.mcc || cleaned.mcc;
+    if (!desc) continue;
+    txs.push({
+      date: r.date,
+      amount: value,
+      description: desc.slice(0, 200),
+      category: r.category.slice(0, 60),
+      mcc,
+      raw: r.description.slice(0, 200),
+    });
+  }
   return txs.sort((a, b) => a.date - b.date);
 }
 
@@ -270,6 +775,14 @@ export const BRAND_RULES = [
   ["Canva Pro", "Дизайн", "🎨", ["CANVA"]],
   ["Figma", "Дизайн", "🎨", ["FIGMA"]],
   ["Notion", "ПО", "🗂️", ["NOTION"]],
+  ["Boosty", "Подписки на авторов", "🚀", ["BOOSTY"]],
+  ["Ozon Premium", "Экосистема", "🔵", ["OZON PREMIUM", "ОЗОН ПРЕМИУМ"]],
+  ["Литрес", "Книги", "📚", ["LITRES", "ЛИТРЕС"]],
+  ["МТС Premium", "Экосистема", "🔴", ["MTS PREMIUM", "МТС ПРЕМИУМ"]],
+  ["ChatGPT", "ИИ", "🤖", ["OPENAI", "CHATGPT"]],
+  ["Т-Банк Pro", "Банк", "🟡", ["ТБАНК PRO", "TINKOFF PRO", "T-BANK PRO"]],
+  ["Обслуживание карты", "Банк", "🏦",
+    ["ПЛАТА ЗА ОБСЛУЖИВАНИЕ", "ЗА ОБСЛУЖИВАНИЕ КАРТ", "КОМИССИЯ ЗА ОБСЛУЖИВАНИЕ", "ЕЖЕМЕСЯЧНАЯ ПЛАТА"]],
 ];
 
 const ABBREV_MAP = { NFLX: "NETFLIX", SPOT: "SPOTIFY", YNDX: "YANDEX" };
@@ -322,12 +835,61 @@ export function cancelUrl(name) {
   return "https://yandex.ru/search/?text=" + encodeURIComponent("как отменить подписку " + name);
 }
 
+// Обвязка банка вокруг названия мерчанта: глаголы, город и страна, коды
+// терминалов, реквизиты банка. Всё это мешает узнать сервис и склеить его
+// разные написания в одну подписку.
+const BANK_TAIL_RE = /\s*\d{0,2}\s*в ГУ Банка России.*$|\s*АО\s*«?Т[- ]?Банк»?.*$|\s*универсальная лицензи.*$|\s*СЧЕТ КОРРЕСПОНДЕНТА.*$|\s*Без НДС.*$/i;
+const PAY_VERB_RE = /^(?:оплата услуг|оплата в|оплата|платеж|платёж|покупка|списание|перевод в|payment|purchase)\s+/i;
+// «YANDEX*5815*PLUS» — между звёздочками MCC-код торговой точки
+const STAR_MCC_RE = /\b([A-Z]{2,12})\*(\d{4})\*([A-Z0-9. _-]{2,30})/i;
+const WALLET_PREFIX_RE = /\b(?:YM|WB|SBP|QR)\*/gi;
+const CITY_TAIL_RE = /\s+[A-Za-zА-Яа-яЁё?'’-]{3,20}\s+(?:RUS|RU|US)\b.*$|\s+(?:RUS|RU|US)\b.*$/i;
+const TERMINAL_SUFFIX_RE = /[_.\s]+(?:P[_ ]?QR|QR|SBP|PP[_ ]?CARD|CARD|SHOP|MARKET)\s*$/i;
+const PHONE_TAIL_RE = /\s*\+?\d[\d ()-]{8,}\d\s*/g;
+
+/**
+ * Приводит описание операции к названию сервиса: убирает «Оплата в», город,
+ * страну, коды терминалов и реквизиты банка. Возвращает {name, mcc}.
+ */
+export function cleanMerchant(desc) {
+  let s = String(desc || "").replace(BANK_TAIL_RE, "").trim();
+  s = s.replace(PAY_VERB_RE, "");
+  let mcc = "";
+  const star = STAR_MCC_RE.exec(s);
+  if (star) {
+    mcc = star[2];
+    s = s.replace(STAR_MCC_RE, `$1 $3`);
+  }
+  s = s.replace(WALLET_PREFIX_RE, "");
+  s = s.replace(PHONE_TAIL_RE, " ");
+  s = s.replace(CITY_TAIL_RE, "");
+  s = s.replace(TERMINAL_SUFFIX_RE, "");
+  // ведущий код терминала: «3DI2 FRISBI», «38OP ТС ПЯТЕРОЧКА»
+  s = s.replace(/^(?=[A-Z0-9]{2,5}\s)(?=[A-Z0-9]*\d)[A-Z0-9]{2,5}\s+/i, "");
+  s = s.replace(/\s+\d{3,6}\s*$/, ""); // номер точки в конце
+  s = s.replace(/\s+/g, " ").replace(/^[\s.,·—–-]+|[\s.,·—–-]+$/g, "").trim();
+  return { name: s, mcc };
+}
+
+// Кириллица → латиница: «ПЯТЕРОЧКА» и «PYATEROCHKA» должны попасть в одну
+// группу, иначе один и тот же сервис двоится в отчёте.
+const TRANSLIT = {
+  А: "A", Б: "B", В: "V", Г: "G", Д: "D", Е: "E", Ё: "E", Ж: "ZH", З: "Z", И: "I",
+  Й: "I", К: "K", Л: "L", М: "M", Н: "N", О: "O", П: "P", Р: "R", С: "S", Т: "T",
+  У: "U", Ф: "F", Х: "H", Ц: "TS", Ч: "CH", Ш: "SH", Щ: "SCH", Ъ: "", Ы: "Y",
+  Ь: "", Э: "E", Ю: "YU", Я: "YA",
+};
+
+export function translit(s) {
+  return String(s).toUpperCase().replace(/[А-ЯЁ]/g, (c) => TRANSLIT[c] ?? c);
+}
+
 export function normalizeDescription(desc) {
-  let s = String(desc).toUpperCase();
+  // транслитерация: «ПЯТЕРОЧКА» и «PYATEROCHKA» — один и тот же магазин
+  let s = translit(desc);
   s = s.replace(/HTTPS?:\/\/\S+|WWW\.\S+/g, " ");
   s = s.replace(/\S*\d\S*/g, " ");
-  s = s.replace(/\.[А-ЯЁ]{2,3}\b/g, " ");
-  s = s.replace(/[^A-ZА-ЯЁ ]+/g, " ");
+  s = s.replace(/[^A-Z ]+/g, " ");
   return s
     .split(/\s+/)
     .filter((t) => t && !STOP_WORDS.has(t) && t.length > 1)
@@ -343,16 +905,23 @@ export function canonicalName(description) {
   return null;
 }
 
-// Dice по символьным множествам слов — как финальный _dice в analyzer.py.
+// Сходство названий по Дайсу на биграммах — так «YANDEX PLUS» и «YANDEX
+// PLUS RU» считаются одним сервисом, а «KARAVAN» и «NAVARAK» — разными
+// (сравнение по множествам символов их путало).
+function bigrams(s) {
+  const t = translit(s).replace(/[^A-Z0-9]/g, "");
+  const set = new Set();
+  for (let i = 0; i < t.length - 1; i++) set.add(t.slice(i, i + 2));
+  return set;
+}
+
 function dice(a, b) {
-  const wa = a.toLowerCase().replace(/[_.*]/g, " ").split(/\s+/).filter(Boolean);
-  const wb = b.toLowerCase().replace(/[_.*]/g, " ").split(/\s+/).filter(Boolean);
-  const sa = new Set(wa.join(""));
-  const sb = new Set(wb.join(""));
-  if (!sa.size || !sb.size) return 0;
+  const A = bigrams(a);
+  const B = bigrams(b);
+  if (!A.size || !B.size) return 0;
   let inter = 0;
-  for (const c of sa) if (sb.has(c)) inter++;
-  return (2 * inter) / (sa.size + sb.size);
+  for (const x of A) if (B.has(x)) inter++;
+  return (2 * inter) / (A.size + B.size);
 }
 
 function groupKey(description) {
@@ -374,22 +943,45 @@ function addMonths(d, months) {
   return new Date(year, month, day);
 }
 
-// Кластеризация сумм (±15%) — переживает смену цены (промо → полная).
-function stableCharges(items) {
+// Кластеризация сумм: у настоящей подписки списания одинаковые. Разовые
+// покупки в одном и том же магазине дают россыпь разных сумм — по ним
+// подписку не объявляем.
+function stableCharges(items, minEvents) {
   const byAmount = [...items].sort((a, b) => a.amount - b.amount);
-  const clusters = [[byAmount[0]]];
-  for (const t of byAmount.slice(1)) {
-    const base = clusters[clusters.length - 1][Math.floor(clusters[clusters.length - 1].length / 2)].amount;
-    if (Math.abs(t.amount - base) <= Math.abs(base) * 0.15) clusters[clusters.length - 1].push(t);
-    else clusters.push([t]);
+  const clusters = [];
+  for (const t of byAmount) {
+    const cur = clusters[clusters.length - 1];
+    if (cur) {
+      const base = cur[Math.floor(cur.length / 2)].amount;
+      if (Math.abs(t.amount - base) <= Math.abs(base) * 0.12) { cur.push(t); continue; }
+    }
+    clusters.push([t]);
   }
   const newest = items.reduce((a, b) => (a.date > b.date ? a : b));
-  const recurring = clusters.filter((c) => c.length >= 2 || c.includes(newest));
-  const stable = recurring.flat().sort((a, b) => a.date - b.date);
-  if (!stable.length) return { stable: [], current: 0 };
-  const currentCluster = recurring.find((c) => c.includes(stable[stable.length - 1]));
-  const amounts = currentCluster.map((t) => Math.abs(t.amount)).sort((a, b) => a - b);
-  return { stable, current: amounts[Math.floor(amounts.length / 2)] };
+  // основная цена — самый многочисленный кластер одинаковых списаний
+  let main = null;
+  for (const c of clusters) {
+    if (!main || c.length > main.length ||
+        (c.length === main.length && c.includes(newest))) main = c;
+  }
+  if (!main || main.length < minEvents) return { stable: [], current: 0 };
+
+  const newestCluster = clusters.find((c) => c.includes(newest));
+  const span = (c) => [Math.min(...c.map((t) => +t.date)), Math.max(...c.map((t) => +t.date))];
+  const [mainFrom, mainTo] = span(main);
+  const set = new Set(main);
+  // смена цены: уровень идёт до или после основного, не вперемешку с ним
+  // (у разовых покупок уровни чередуются во времени — их не берём)
+  for (const c of clusters) {
+    if (c === main) continue;
+    const [from, to] = span(c);
+    if (c.includes(newest) || (c.length >= 2 && (to < mainFrom || from > mainTo))) {
+      for (const t of c) set.add(t);
+    }
+  }
+  const stable = [...set].sort((a, b) => a.date - b.date);
+  const priced = (newestCluster || main).map((t) => Math.abs(t.amount)).sort((a, b) => a - b);
+  return { stable, current: priced[Math.floor(priced.length / 2)] };
 }
 
 export function detectSubscriptions(txs) {
@@ -413,7 +1005,9 @@ export function detectSubscriptions(txs) {
   // Слепляем близкие норм-имена к известным брендам.
   for (const nk of normKeys) {
     for (const [name] of BRAND_RULES) {
-      if (dice(nk.value, name) >= 0.75) {
+      const a = translit(nk.value).replace(/[^A-Z0-9]/g, "");
+      const b = translit(name).replace(/[^A-Z0-9]/g, "");
+      if (b.length >= 4 && (a.includes(b) || (a.length >= 4 && b.includes(a)))) {
         const src = groups.get("norm|" + nk.value);
         const dst = groups.get("brand|" + name);
         if (src && dst) dst.items.push(...src.items);
@@ -425,30 +1019,51 @@ export function detectSubscriptions(txs) {
 
   const subs = [];
   for (const { key, items } of groups.values()) {
+    // ключ группы транслитерирован, поэтому проверяем ещё и исходные описания
+    const sample = key.value + " " +
+      [...new Set(items.map((t) => t.description))].slice(0, 4).join(" ");
     // внутренние переводы и вклады — не подписки, даже при регулярности
-    if (INTERNAL_RE.test(key.value)) continue;
+    if (INTERNAL_RE.test(sample)) continue;
     // платежи ЖКХ и бюджетных учреждений — регулярные, но не подписки
-    if (UTILITY_RE.test(key.value)) continue;
+    if (UTILITY_RE.test(sample)) continue;
     // покупки в рознице и по QR — не подписки, даже если повторяются
-    if (RETAIL_RE.test(key.value)) continue;
+    if (RETAIL_RE.test(sample)) continue;
+    // от описания остался только город или страна — это не название сервиса
+    if (CITY_ONLY_RE.test(key.value.trim())) continue;
+    // категория из выписки: ЖКХ, супермаркеты, транспорт и т.п. — не подписки
+    const catHits = items.filter((t) => t.category && NON_SUB_CATEGORY_RE.test(t.category)).length;
+    if (catHits && catHits >= items.length * 0.6) continue;
+    // MCC-код торговой точки: продукты, общепит, аптеки, транспорт — не подписки
+    const mccHits = items.filter((t) => t.mcc && NON_SUB_MCC.has(t.mcc)).length;
+    if (mccHits && mccHits >= items.length * 0.6) continue;
     const minEvents = key.kind === "brand" ? 2 : 3;
     if (items.length < minEvents) continue;
-    const { stable, current } = stableCharges(items);
+    const { stable, current } = stableCharges(items, minEvents);
     if (stable.length < minEvents) continue;
-    const gaps = stable
-      .slice(1)
-      .map((t, i) => Math.round((t.date - stable[i].date) / 86400000))
-      .filter((g) => g >= 10)
-      .sort((a, b) => a - b);
+    // интервалы между списаниями: у подписки они ровные. Частые визиты в
+    // магазин дают короткие интервалы — раньше их отбрасывали, и покупки
+    // выглядели как ежемесячная подписка.
+    const gaps = stable.slice(1).map((t, i) => Math.round((t.date - stable[i].date) / 86400000));
     if (!gaps.length) continue;
-    const medGap = gaps[Math.floor(gaps.length / 2)];
-    let period;
-    if (medGap >= 20 && medGap <= 40) period = "monthly";
-    else if (medGap >= 340 && medGap <= 390) period = "annual";
-    else continue;
+    const sortedGaps = [...gaps].sort((a, b) => a - b);
+    const medGap = sortedGaps[Math.floor(sortedGaps.length / 2)];
+    const WINDOWS = [
+      ["monthly", 20, 40], ["quarterly", 80, 100],
+      ["semiannual", 170, 200], ["annual", 330, 400],
+    ];
+    const win = WINDOWS.find(([, lo, hi]) => medGap >= lo && medGap <= hi);
+    if (!win) continue;
+    const [period, lo, hi] = win;
+    // большинство интервалов должно попадать в тот же ритм
+    if (gaps.filter((g) => g >= lo && g <= hi).length < gaps.length * 0.6) continue;
 
+    const MONTHS = { monthly: 1, quarterly: 3, semiannual: 6, annual: 12 };
+    const PERIOD_RU = {
+      monthly: "ежемесячно", quarterly: "раз в 3 месяца",
+      semiannual: "раз в полгода", annual: "ежегодно",
+    };
     const price = Math.abs(current);
-    const monthly = period === "monthly" ? price : price / 12;
+    const monthly = price / MONTHS[period];
     const title = key.kind === "brand" ? key.value : key.value.replace(/\w\S*/g, (w) => w[0] + w.slice(1).toLowerCase()) || "Подписка";
     const canon = canonicalName(stable[stable.length - 1].description) || [title, "Прочее", "💳"];
     const name = key.kind === "brand" ? canon[0] : title;
@@ -456,10 +1071,10 @@ export function detectSubscriptions(txs) {
     if (name.trim().length < 3) continue;
     const last = stable[stable.length - 1].date;
     // следующее списание: дата в будущем даже если платежи давно прекратились
-    let nextDate = addMonths(last, period === "monthly" ? 1 : 12);
     const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    let nextDate = addMonths(last, MONTHS[period]);
     while (nextDate < todayMid) {
-      nextDate = addMonths(nextDate, period === "monthly" ? 1 : 12);
+      nextDate = addMonths(nextDate, MONTHS[period]);
     }
     subs.push({
       id: (title.toLowerCase().replace(/\W+/g, "_").slice(0, 40)) || "sub",
@@ -467,10 +1082,14 @@ export function detectSubscriptions(txs) {
       category: canon[1],
       icon: canon[2],
       amount: +price.toFixed(2),
-      period: period === "monthly" ? "ежемесячно" : "ежегодно",
+      period: PERIOD_RU[period],
       monthly_cost: +monthly.toFixed(2),
       yearly_cost: +(monthly * 12).toFixed(2),
       charges: stable.length,
+      // сколько уже отдано этому сервису за период выписки
+      total_paid: +stable.reduce((acc, t) => acc + Math.abs(t.amount), 0).toFixed(2),
+      // списаний давно нет — подписку, похоже, уже отменили
+      active: (todayMid - last) / 86400000 <= MONTHS[period] * 31 * 2,
       first_charge: dateKey(stable[0].date),
       last_charge: dateKey(last),
       next_charge: dateKey(nextDate),

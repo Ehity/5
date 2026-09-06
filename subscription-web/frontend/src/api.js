@@ -1,7 +1,7 @@
 import {
-  buildLetter, detectSubscriptions, extractPdfLines, makeDemoPdf,
-  monthlyExpenseSeriesAll, monthlyExpenseSeriesFromTxs,
-  parseCsvText, testStatementCsv, transactionsFromLines,
+  buildLetter, detectSubscriptions, extractPdfPages, makeDemoPdf,
+  monthlyExpenseSeriesAll, monthlyExpenseSeriesFromTxs, pagesToLines,
+  parseCsvText, testStatementCsv, transactionsFromLines, transactionsFromPages,
 } from "./lib/analyzer.js";
 
 const BASE = "";
@@ -94,8 +94,10 @@ export async function uploadStatement(file) {
   try {
     if (fname.endsWith(".pdf")) {
       const buf = await file.arrayBuffer();
-      const lines = await extractPdfLines(buf);
-      const txs = transactionsFromLines(lines);
+      const pages = await extractPdfPages(buf);
+      // сначала колоночный разбор (табличные выписки), затем построчный
+      let txs = transactionsFromPages(pages);
+      if (!txs.length) txs = transactionsFromLines(pagesToLines(pages));
       if (!txs.length) {
         throw new Error("В PDF не найдено транзакций. Убедитесь, что это текстовая выписка (не скан).");
       }
